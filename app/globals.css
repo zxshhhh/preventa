@@ -1,0 +1,242 @@
+@import "tailwindcss";
+
+@theme inline {
+    --primary-text-color: #F1F5F9;
+    --gray-text-color: #94A3B8;
+
+    --bg-color: #0B0F19;
+    --surface-color: rgba(255, 255, 255, 0.045);
+    --surface-border: rgba(255, 255, 255, 0.09);
+    --surface-solid: #111827;
+
+    --ember-start: #FF5B4D;
+    --ember-end: #FF9F3C;
+    --secondary-color: #FF8350;
+
+    --green-indicator: #34D399;
+    --amber-indicator: #FBBF24;
+    --red-indicator: #F87171;
+    --blue-indicator: #60A5FA;
+    --cyan-indicator: #22D3EE;
+    --yellow-indicator: #FACC15;
+    --orange-indicator: #FB923C;
+    --info-indicator: #64748B;
+
+    --input-color: #0F172A;
+}
+
+body {
+    background-color: var(--bg-color);
+    background-image:
+        radial-gradient(64rem 40rem at -12% -22%, rgba(255, 110, 60, 0.16), transparent 65%),
+        radial-gradient(52rem 36rem at 112% 112%, rgba(96, 165, 250, 0.09), transparent 65%),
+        linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
+    background-attachment: fixed;
+    color: var(--primary-text-color);
+    font-family: 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+    background: rgba(255, 131, 80, 0.35);
+}
+
+html {
+    overflow-y: scroll;
+}
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+*::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+*::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 9999px;
+    border: 2px solid var(--bg-color);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--secondary-color);
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.05);
+    cursor: pointer;
+    display: inline-grid;
+    place-content: center;
+    transition: all 0.3s ease-in-out;
+}
+
+input[type="checkbox"]::before {
+    content: "";
+    width: 12px;
+    height: 12px;
+    clip-path: polygon(16% 52%, 40% 76%, 88% 28%, 76% 18%, 38% 56%, 28% 46%);
+    transform: scale(0);
+    transition: transform 0.15s ease;
+}
+
+input[type="checkbox"]:checked {
+    background-color: var(--secondary-color);
+    border-color: var(--secondary-color);
+}
+
+input[type="checkbox"]:checked::before {
+    transform: scale(1);
+    background-color: #fff;
+}
+
+@utility nav-logo {
+    @apply p-5 flex justify-center hover:bg-white/5 transition-all duration-300 ease-in-out hover:text-(--secondary-color) cursor-pointer;
+}
+
+@utility input-profile {
+    @apply h-10 rounded-lg px-3 focus:outline-none focus:ring-2 focus:ring-(--secondary-color)/50 bg-white/5 border border-white/10 text-gray-100 placeholder:text-gray-500 transition-all duration-300 ease-in-out;
+}
+
+@utility glow-buttons {
+    box-shadow: 0 0 12px rgba(255, 131, 80, 0.35);
+}
+
+@utility bg-ember {
+    background-image: linear-gradient(135deg, var(--ember-start), var(--ember-end));
+}
+
+@utility panel-card {
+    @apply bg-(--surface-color) border border-(--surface-border) rounded-2xl;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.3), 0 12px 32px -14px rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+@utility btn-primary {
+    @apply inline-flex items-center justify-center gap-2 text-white font-bold rounded-xl cursor-pointer transition-all duration-200 hover:-translate-y-0.5 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) disabled:opacity-50 disabled:pointer-events-none;
+    background-image: linear-gradient(135deg, var(--ember-start), var(--ember-end));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 10px 22px -10px rgba(255, 94, 60, 0.65);
+
+    &:hover {
+        filter: brightness(1.06) saturate(1.04);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 14px 30px -12px rgba(255, 94, 60, 0.85);
+    }
+
+    &:active {
+        filter: brightness(0.98);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 6px 14px -8px rgba(255, 94, 60, 0.6);
+    }
+}
+
+@utility btn-outline {
+    @apply inline-flex items-center justify-center gap-2 border border-(--secondary-color)/50 text-(--secondary-color) font-bold rounded-xl cursor-pointer transition-all duration-200 hover:bg-(--secondary-color)/10 hover:border-(--secondary-color) active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) disabled:opacity-50 disabled:pointer-events-none;
+
+    &:hover {
+        box-shadow: 0 8px 18px -10px rgba(255, 131, 80, 0.45);
+    }
+}
+
+@utility btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 text-gray-400 font-bold rounded-xl cursor-pointer transition-all duration-200 hover:text-(--secondary-color) hover:bg-white/5 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/40 focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) disabled:opacity-50 disabled:pointer-events-none;
+}
+
+@utility btn-icon {
+    @apply inline-flex items-center justify-center rounded-xl p-2 text-gray-400 hover:text-(--secondary-color) hover:bg-white/5 cursor-pointer transition-all duration-200 active:scale-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/40 focus-visible:ring-offset-2;
+}
+
+@utility btn-icon-light {
+    @apply inline-flex items-center justify-center rounded-xl p-2 text-white/80 hover:text-white hover:bg-white/15 cursor-pointer transition-all duration-200 active:scale-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60;
+}
+
+@utility btn-sm {
+    @apply text-xs px-3 h-8;
+}
+
+@utility btn-md {
+    @apply text-sm px-4 h-10;
+}
+
+@utility btn-lg {
+    @apply text-sm px-6 h-12;
+}
+
+@utility btn-segment {
+    @apply px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-all hover:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/40;
+}
+
+@utility btn-segment-active {
+    @apply bg-white/10 text-(--secondary-color) shadow-sm;
+}
+
+.cls-1 { fill: none; }
+
+.drawer-enter-active,
+.drawer-leave-active {
+    transition: opacity 0.2s ease;
+}
+
+.drawer-enter-active > aside,
+.drawer-leave-active > aside {
+    transition: transform 0.25s ease;
+}
+
+.drawer-enter-from,
+.drawer-leave-to {
+    opacity: 0;
+}
+
+.drawer-enter-from > aside,
+.drawer-leave-to > aside {
+    transform: translateX(-100%);
+}
+
+.scale-enter-active,
+.scale-leave-active {
+    transition: opacity 0.2s ease;
+}
+
+.scale-enter-active > div:last-child,
+.scale-leave-active > div:last-child {
+    transition: transform 0.2s ease, opacity 0.2s ease;
+    transform-origin: bottom left;
+}
+
+.scale-enter-from,
+.scale-leave-to {
+    opacity: 0;
+}
+
+.scale-enter-from > div:last-child,
+.scale-leave-to > div:last-child {
+    opacity: 0;
+    transform: scale(0.9);
+}
+
+.scroll-thin::-webkit-scrollbar {
+    width: 8px;
+}
+
+.scroll-thin::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 9999px;
+}
+
+.scroll-thin::-webkit-scrollbar-track {
+    background: transparent;
+}
