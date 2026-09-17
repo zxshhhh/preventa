@@ -1,0 +1,10 @@
+name: Workflow Push
+on: [push]
+jobs:
+  run-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Run a simple command
+        run: echo "Github Action is working!"

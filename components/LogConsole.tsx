@@ -42,7 +42,7 @@ export default function LogConsole() {
     <main className="relative">
       <div className="flex flex-col items-start mb-6 gap-1">
         <h1 className="font-bold text-2xl">Report Logs</h1>
-        <p className="text-sm text-gray-400">Logs event archive by month — select a month to view its logs.</p>
+        <p className="text-sm text-gray-400">Logs event archive by month. select a month to view its logs.</p>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4 sm:gap-5 auto-rows-fr lg:min-h-[calc(100vh-9rem)]">
         {months.map((m) => {

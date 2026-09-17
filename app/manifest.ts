@@ -2,8 +2,8 @@ import type { MetadataRoute } from 'next'
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'PREVENTA',
-    short_name: 'PREVENTA',
+    name: 'Preventa',
+    short_name: 'Preventa',
     description: 'Fire prevention and sensor monitoring dashboard',
     id: '/',
     start_url: '/login',

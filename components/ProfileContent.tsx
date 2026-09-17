@@ -41,11 +41,6 @@ export default function ProfileContent() {
     pushToast('Changes saved', 'Your profile has been updated.')
   }
 
-  const resetForm = () => {
-    setForm(INITIAL_FORM)
-    setAvatarSrc(DEFAULT_AVATAR)
-  }
-
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -67,14 +62,8 @@ export default function ProfileContent() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="font-bold text-2xl">PROFILE</h1>
+        <h1 className="font-bold text-2xl">Profile</h1>
         <div className="flex items-center gap-3">
-          <button
-            onClick={resetForm}
-            className="btn-outline btn-md"
-          >
-            RESET
-          </button>
           <button
             onClick={applyChanges}
             className="btn-primary btn-md"
@@ -83,7 +72,6 @@ export default function ProfileContent() {
           </button>
         </div>
       </div>
-
       <div className="flex flex-col items-center">
         <div className="relative group">
           <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />

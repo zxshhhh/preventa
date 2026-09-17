@@ -220,10 +220,9 @@ function HowItWorks({ current }: { current: CalibrationMap }) {
       <p className="text-xs text-gray-400 mt-1 leading-relaxed">
         Every sensor has two threshold levels that decide its live status badge. Calibration lets you set where{' '}
         <span className="font-bold text-gray-200">NOMINAL</span> ends and{' '}
-        <span className="font-bold text-gray-200">WARNING</span> begins — the values the system compares each reading
+        <span className="font-bold text-gray-200">WARNING</span> begins. The values the system compares each reading
         against before raising an alert.
       </p>
-
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
         <div className="rounded-xl border border-emerald-400/25 bg-emerald-400/10 p-3">
           <p className="text-[10px] font-extrabold tracking-wide text-emerald-300">NOMINAL (SAFE)</p>
@@ -234,7 +233,7 @@ function HowItWorks({ current }: { current: CalibrationMap }) {
         <div className="rounded-xl border border-amber-400/25 bg-amber-400/10 p-3">
           <p className="text-[10px] font-extrabold tracking-wide text-amber-300">WARNING (ELEVATED)</p>
           <p className="text-xs text-gray-400 mt-1 leading-relaxed">
-            Reading sits between NOMINAL and WARNING. The sensor is above normal — worth monitoring but not yet
+            Reading sits between NOMINAL and WARNING. The sensor is above normal, worth monitoring but not yet
             dangerous.
           </p>
         </div>
@@ -245,16 +244,15 @@ function HowItWorks({ current }: { current: CalibrationMap }) {
           </p>
         </div>
       </div>
-
       <div className="mt-4 text-xs text-gray-400 space-y-2 leading-relaxed">
         <p className="font-bold text-gray-100">What happens when you edit calibration?</p>
         <ul className="list-disc list-inside space-y-1.5">
           <li>
-            <span className="font-bold">Lowering the WARNING threshold</span> makes a sensor more sensitive — it flips to
+            <span className="font-bold">Lowering the WARNING threshold</span> makes a sensor more sensitive which it flips to
             WARNING/CRITICAL earlier and triggers alerts sooner. The trade-off is a higher chance of false alarms.
           </li>
           <li>
-            <span className="font-bold">Raising the WARNING threshold</span> makes a sensor more tolerant — fewer alerts
+            <span className="font-bold">Raising the WARNING threshold</span> makes a sensor more tolerant which is fewer alerts
             and quieter notification logs. The trade-off is that a real hazard may go unnoticed longer.
           </li>
           <li>
@@ -263,7 +261,6 @@ function HowItWorks({ current }: { current: CalibrationMap }) {
           </li>
         </ul>
       </div>
-
       <div className="mt-4 overflow-x-auto">
         <table className="w-full text-xs min-w-130">
           <thead>
