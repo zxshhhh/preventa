@@ -15,23 +15,36 @@
     "deploy:response-store": "wrangler deploy --config wrangler.response-store.jsonc"
   },
   "dependencies": {
+    "@cloudflare/workers-response-store": "^0.1.0-beta.0",
+    "@vinext/cloudflare": "^1.0.0-beta.8",
     "next": "16.3.4",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "react-server-dom-webpack": "^19.2.8",
+    "vinext": "^1.0.0-beta.10"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.54.11",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.1.1",
+    "@vitejs/plugin-rsc": "^0.5.35",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
     "sharp": "^0.35.4",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vite": "^8.3.0",
+    "wrangler": "^4.133.0"
   },
   "allowScripts": {
-    "unrs-resolver@1.12.2": true
+    "unrs-resolver@1.12.2": true,
+    "vinext": true,
+    "react-server-dom-webpack": true,
+    "@vinext/cloudflare": true,
+    "@cloudflare/workers-response-store": true
   },
   "type": "module"
 }
