@@ -1,20 +1,137 @@
 'use client'
 
-import { useMemo, useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import LogMonthModal from '@/components/LogMonthModal'
 import LogDetailModal from '@/components/LogDetailModal'
 import { useHydrated } from '@/lib/useHydrated'
+import { useSensors } from '@/context/useSensors'
+import { useDevices } from '@/context/useDevice'
 import type { LogEntry, MonthGroup } from '@/lib/logReport'
-import { rawLogs, groupByMonth, daySummary, daysInMonth, firstWeekday, monthActivity } from '@/lib/logReport'
+import { groupByMonth, daySummary, daysInMonth, firstWeekday, monthActivity } from '@/lib/logReport'
+import { fetchLogs, type EventStatusFilter } from '@/lib/api/reports'
+import { isApiConfigured } from '@/lib/api/config'
 
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
 
+type StatusChip = 'ALL' | EventStatusFilter
+
+const STATUS_CHIPS: { value: StatusChip; label: string }[] = [
+  { value: 'ALL', label: 'ALL' },
+  { value: 'active', label: 'ACTIVE' },
+  { value: 'resolved', label: 'RESOLVED' },
+  { value: 'false_alarm', label: 'FALSE ALARM' },
+]
+
+/** Minimum spacing between auto refreshes (focus/reconnect/tier transitions). */
+const REFRESH_DEBOUNCE_MS = 3000
+
 export default function LogConsole() {
   const hydrated = useHydrated()
+  const { lastFusion } = useSensors()
+  const { devices, selected, setSelectedId } = useDevices()
   const [selectedMonth, setSelectedMonth] = useState<MonthGroup | null>(null)
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null)
+  const [baseLogs, setBaseLogs] = useState<LogEntry[]>([])
+  const [filteredLogs, setFilteredLogs] = useState<LogEntry[]>([])
+  const [yearKeys, setYearKeys] = useState<number[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [statusFilter, setStatusFilter] = useState<StatusChip>('ALL')
+  const [reloadToken, setReloadToken] = useState(0)
+  const lastTierRef = useRef<number | null>(null)
+  const lastRefreshRef = useRef(0)
 
-  const months = useMemo(() => groupByMonth(rawLogs), [])
+  const deviceFilter = selected?.hardwareId ?? null
+  const filtered = selected !== null || statusFilter !== 'ALL'
+  const displayLogs = filtered ? filteredLogs : baseLogs
+
+  const months = useMemo(() => groupByMonth(displayLogs, yearKeys), [displayLogs, yearKeys])
+
+  // Unfiltered fetch: builds the month skeleton so all 12 month cards stay visible
+  // no matter what the DEVICE/STATUS chips select.
+  useEffect(() => {
+    if (!hydrated || !isApiConfigured()) return
+    let cancelled = false
+    lastRefreshRef.current = Date.now()
+    fetchLogs()
+      .then((data) => {
+        if (cancelled) return
+        setBaseLogs(data)
+        setYearKeys(Array.from(new Set(data.map((l) => Number(l.timestamp.slice(0, 4))))).sort((a, b) => b - a))
+        setError(null)
+      })
+      .catch(() => {
+        if (!cancelled) setError('Could not load event history — check your connection and retry.')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [hydrated, reloadToken])
+
+  // Filtered fetch: drives the event dots and month-modal content only — the grid never collapses.
+  useEffect(() => {
+    if (!hydrated || !isApiConfigured()) return
+    if (!filtered) return
+    let cancelled = false
+    lastRefreshRef.current = Date.now()
+    const t = window.setTimeout(() => {
+      if (!cancelled) {
+        setLoading(true)
+        setError(null)
+      }
+    }, 0)
+    fetchLogs({
+      deviceId: deviceFilter ?? undefined,
+      status: statusFilter === 'ALL' ? undefined : statusFilter,
+    })
+      .then((data) => {
+        if (!cancelled) setFilteredLogs(data)
+      })
+      .catch(() => {
+        if (!cancelled) setError('Could not load filtered events — check your connection and retry.')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [hydrated, deviceFilter, statusFilter, reloadToken, filtered])
+
+  // Refresh on screen focus and after reconnect.
+  useEffect(() => {
+    if (!hydrated || !isApiConfigured()) return
+    const bump = () => {
+      if (document.visibilityState === 'hidden') return
+      if (Date.now() - lastRefreshRef.current < REFRESH_DEBOUNCE_MS) return
+      lastRefreshRef.current = Date.now()
+      setReloadToken((t) => t + 1)
+    }
+    window.addEventListener('focus', bump)
+    document.addEventListener('visibilitychange', bump)
+    window.addEventListener('online', bump)
+    return () => {
+      window.removeEventListener('focus', bump)
+      document.removeEventListener('visibilitychange', bump)
+      window.removeEventListener('online', bump)
+    }
+  }, [hydrated])
+
+  // Refresh when active-device readings indicate a tier transition (crossing Tier 3).
+  useEffect(() => {
+    if (!hydrated || !isApiConfigured()) return
+    const tier = lastFusion?.finalTier ?? null
+    const prev = lastTierRef.current
+    lastTierRef.current = tier
+    if (prev === null || tier === null) return
+    const crossed = (prev < 3 && tier >= 3) || (prev >= 3 && tier < 3)
+    if (!crossed) return
+    if (Date.now() - lastRefreshRef.current < REFRESH_DEBOUNCE_MS) return
+    lastRefreshRef.current = Date.now()
+    setReloadToken((t) => t + 1)
+  }, [lastFusion, hydrated])
+
   const [today, setToday] = useState(() => new Date())
 
   useEffect(() => {
@@ -40,10 +157,54 @@ export default function LogConsole() {
 
   return (
     <main className="relative">
-      <div className="flex flex-col items-start mb-6 gap-1">
+      <div className="flex flex-col items-start mb-4 gap-1">
         <h1 className="font-bold text-2xl">Report Logs</h1>
         <p className="text-sm text-gray-400">Logs event archive by month. select a month to view its logs.</p>
+        {loading && <span className="text-xs font-semibold text-amber-400">Loading live logs...</span>}
       </div>
+
+      {hydrated && isApiConfigured() && (devices.length > 0 || filtered) && (
+        <div className="flex flex-wrap items-center gap-2 mb-5">
+          {devices.length > 0 && (
+            <>
+              <span className="text-[10px] font-extrabold text-gray-400 tracking-widest">DEVICE</span>
+              <FilterChip active={selected === null} onClick={() => setSelectedId(null)}>
+                ALL
+              </FilterChip>
+              {devices.map((d) => (
+                <FilterChip key={d.id} active={selected?.id === d.id} onClick={() => setSelectedId(d.id)}>
+                  {d.name}
+                </FilterChip>
+              ))}
+            </>
+          )}
+          <span className="text-[10px] font-extrabold text-gray-400 tracking-widest ml-1">STATUS</span>
+          {STATUS_CHIPS.map(({ value, label }) => (
+            <FilterChip key={value} active={statusFilter === value} onClick={() => setStatusFilter(value)}>
+              {label}
+            </FilterChip>
+          ))}
+        </div>
+      )}
+
+      {error && (
+        <div className="panel-card p-4 mb-5 flex flex-wrap items-center justify-between gap-3 border border-red-400/25 bg-red-400/10">
+          <p className="text-xs font-semibold text-(--red-indicator)">{error}</p>
+          <button onClick={() => setReloadToken((t) => t + 1)} className="btn-outline btn-sm">
+            RETRY
+          </button>
+        </div>
+      )}
+      {hydrated && !loading && !error && months.length === 0 && (
+        <div className="panel-card p-8 text-center text-sm text-gray-400">
+          No report logs recorded yet.
+        </div>
+      )}
+      {hydrated && !loading && !error && filtered && months.length > 0 && displayLogs.length === 0 && (
+        <p className="text-xs text-gray-500 mb-3">
+          No events match the selected filters — the calendar shows the unfiltered timeline.
+        </p>
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4 sm:gap-5 auto-rows-fr lg:min-h-[calc(100vh-9rem)]">
         {months.map((m) => {
           const hasLogs = m.logs.length > 0
@@ -117,5 +278,21 @@ export default function LogConsole() {
         />
       )}
     </main>
+  )
+}
+
+function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={
+        'btn-segment text-[10px] tracking-wide ' +
+        (active ? 'btn-segment-active' : 'text-gray-400 hover:text-gray-200')
+      }
+    >
+      {children}
+    </button>
   )
 }

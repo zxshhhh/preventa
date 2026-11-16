@@ -1,5 +1,5 @@
-export type SensorId = 'mq7' | 'dht22' | 'acs712'
-export type TrendRange = '24H' | '7D' | '30D'
+export type SensorId = 'mq7' | 'dht22' | 'acs712' | 'humidity'
+export type TrendRange = '1H' | '24H' | '7D' | '30D'
 export type StatusLevel = 'NOMINAL' | 'WARNING' | 'CRITICAL'
 
 export interface SensorConfig {
@@ -21,6 +21,7 @@ export interface SensorConfig {
 export interface SeriesPoint {
   label: string
   value: number
+  t?: number
 }
 
 export interface SensorSeries {
@@ -70,30 +71,22 @@ export const SENSORS: Record<SensorId, SensorConfig> = {
     baseline: 3.9,
     volatility: 0.65,
   },
+  humidity: {
+    id: 'humidity',
+    name: 'Humidity',
+    unit: '%',
+    decimals: 0,
+    color: '#22D3EE',
+    thresholdNominal: 50,
+    thresholdWarning: 70,
+    min: 30,
+    max: 80,
+    baseline: 46,
+    volatility: 1,
+  },
 }
 
-export const HUMIDITY_CONFIG: SensorConfig = {
-  id: 'dht22',
-  name: 'Humidity',
-  unit: '%',
-  decimals: 0,
-  color: '#22D3EE',
-  thresholdNominal: 50,
-  thresholdWarning: 70,
-  min: 30,
-  max: 80,
-  baseline: 46,
-  volatility: 1,
-}
-
-export function humidityFromTemp(temp: number): number {
-  const h = 40 + (24.5 - temp) * 3
-  return Math.round(Math.min(80, Math.max(30, h)))
-}
-
-export function deriveHumidity(points: SeriesPoint[]): SeriesPoint[] {
-  return points.map((p) => ({ label: p.label, value: humidityFromTemp(p.value) }))
-}
+export const HUMIDITY_CONFIG: SensorConfig = SENSORS.humidity
 
 export interface ReportReading {
   label: string
@@ -109,197 +102,68 @@ export interface ReportLog {
   readings: ReportReading[]
 }
 
-export function snapshotReadings(series: SensorSeries[]): ReportReading[] {
-  const last = (id: SensorId) => series.find((s) => s.id === id)?.points.at(-1)
-  const gas = last('mq7')
-  const temp = last('dht22')
-  const power = last('acs712')
-  const readings: ReportReading[] = []
-
-  if (gas) {
-    const cfg = SENSORS.mq7
-    readings.push({
-      label: cfg.name,
-      value: gas.value,
-      unit: cfg.unit,
-      decimals: cfg.decimals,
-      level: levelFor(cfg, gas.value).level,
-    })
-  }
-  if (temp) {
-    const cfg = SENSORS.dht22
-    readings.push({
-      label: cfg.name,
-      value: temp.value,
-      unit: cfg.unit,
-      decimals: cfg.decimals,
-      level: levelFor(cfg, temp.value).level,
-    })
-    const humidity = humidityFromTemp(temp.value)
-    readings.push({
-      label: HUMIDITY_CONFIG.name,
-      value: humidity,
-      unit: HUMIDITY_CONFIG.unit,
-      decimals: HUMIDITY_CONFIG.decimals,
-      level: levelFor(HUMIDITY_CONFIG, humidity).level,
-    })
-  }
-  if (power) {
-    const cfg = SENSORS.acs712
-    readings.push({
-      label: cfg.name,
-      value: power.value,
-      unit: cfg.unit,
-      decimals: cfg.decimals,
-      level: levelFor(cfg, power.value).level,
-    })
-  }
-  return readings
+export const RANGE_MS: Record<TrendRange, number> = {
+  '1H': 60 * 60 * 1000,
+  '24H': 24 * 60 * 60 * 1000,
+  '7D': 7 * 24 * 60 * 60 * 1000,
+  '30D': 30 * 24 * 60 * 60 * 1000,
 }
 
-const HOUR_MS = 3600e3
-const DAY_MS = 86400e3
-const SEED = 20260731
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value))
+const BUCKET_COUNT: Record<TrendRange, number> = {
+  '1H': 60,
+  '24H': 96,
+  '7D': 84,
+  '30D': 90,
 }
 
-function round(value: number, decimals: number): number {
-  const f = Math.pow(10, decimals)
-  return Math.round(value * f) / f
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
+function clockLabel(d: Date): string {
+  const h24 = d.getHours()
+  const suffix = h24 < 12 ? 'AM' : 'PM'
+  const h12 = h24 % 12 || 12
+  return `${h12}:${pad2(d.getMinutes())} ${suffix}`
 }
 
-function hash(s: string): number {
-  let h = 0
-  for (let i = 0; i < s.length; i++) h = (h << 5) - h + s.charCodeAt(i) | 0
-  return h & 0xffff
+export function formatRangeLabel(ts: number, range: TrendRange): string {
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return ''
+  if (range === '30D') return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  if (range === '7D') return `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${clockLabel(d)}`
+  return clockLabel(d)
 }
 
-function mulberry32(a: number) {
-  return () => {
-    a |= 0
-    a = (a + 0x6d2b79f5) | 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
+export function bucketPoints(points: SeriesPoint[], range: TrendRange): SeriesPoint[] {
+  const timed = points.filter((p): p is SeriesPoint & { t: number } => typeof p.t === 'number' && Number.isFinite(p.t))
+  if (timed.length < 2) return points
 
-function formatTimeLabel(d: Date): string {
-  let h = d.getHours()
-  const am = h < 12 ? 'AM' : 'PM'
-  h = h % 12 || 12
-  const m = d.getMinutes().toString().padStart(2, '0')
-  return `${h}:${m} ${am}`
-}
+  const sorted = [...timed].sort((a, b) => a.t - b.t)
+  const start = sorted[0].t
+  const end = sorted[sorted.length - 1].t
+  const bucketCount = BUCKET_COUNT[range]
+  const size = Math.max((end - start) / bucketCount, 1)
 
-function formatDateLabel(d: Date): string {
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-}
+  const sums = new Array<number>(bucketCount).fill(0)
+  const counts = new Array<number>(bucketCount).fill(0)
 
-function randomWalk(
-  cfg: SensorConfig,
-  stepMs: number,
-  count: number,
-  end: Date,
-  rng: () => number,
-  labeler: (d: Date) => string,
-): SeriesPoint[] {
-  const points: SeriesPoint[] = []
-  let value = cfg.baseline + (rng() - 0.5) * cfg.volatility * 2
-  for (let i = count - 1; i >= 0; i--) {
-    const d = new Date(end.getTime() - i * stepMs)
-    value = clamp(value + (rng() - 0.5) * cfg.volatility, cfg.min, cfg.max)
-    if (cfg.spikeChance && rng() < cfg.spikeChance) value = clamp(value + (cfg.spike ?? 0), cfg.min, cfg.max)
-    points.push({ label: labeler(d), value: round(value, cfg.decimals) })
-  }
-  return points
-}
-
-export function generateSeries(now = new Date()): SensorSeries[] {
-  return (Object.keys(SENSORS) as SensorId[]).map((id) => {
-    const cfg = SENSORS[id]
-    const rng = mulberry32(SEED + hash(id))
-    return { id, points: randomWalk(cfg, HOUR_MS, 24, now, rng, formatTimeLabel) }
-  })
-}
-
-export function buildRangeSeries(range: TrendRange, now = new Date()): SensorSeries[] {
-  const count = range === '7D' ? 7 : 30
-  return (Object.keys(SENSORS) as SensorId[]).map((id) => {
-    const cfg = SENSORS[id]
-    const rng = mulberry32(SEED + hash(id) + (range === '7D' ? 11 : 17))
-    return { id, points: randomWalk(cfg, DAY_MS, count, now, rng, formatDateLabel) }
-  })
-}
-
-const ALARM_PERIOD_MS = 300_000
-const ALARM_EPISODE_MS = 50_000
-
-const SYSTEM_PERIOD_MS = 300_000
-const SYSTEM_OFFLINE_MS = 27_000
-
-export function systemOnline(now = new Date()): boolean {
-  const elapsed = now.getTime() % SYSTEM_PERIOD_MS
-  const offset = ((hash('system::status') % 97) / 97) * (SYSTEM_PERIOD_MS - SYSTEM_OFFLINE_MS)
-  return elapsed < offset || elapsed >= offset + SYSTEM_OFFLINE_MS
-}function alarmTarget(cfg: SensorConfig, now: Date): number | null {
-  const elapsed = now.getTime() % ALARM_PERIOD_MS
-  const offset = ((hash(cfg.id) % 97) / 97) * (ALARM_PERIOD_MS - ALARM_EPISODE_MS)
-  if (elapsed < offset || elapsed >= offset + ALARM_EPISODE_MS) return null
-  const bump = (hash(cfg.id + '!') % 31) / 31
-  return cfg.thresholdWarning * (1.02 + bump * 0.28)
-}
-
-export function tickSeries(series: SensorSeries[], now = new Date(), maxPoints = 48): SensorSeries[] {
-  const label = formatTimeLabel(now)
-  return series.map((s) => {
-    const cfg = SENSORS[s.id]
-    const pts = s.points
-    const last = pts.length ? pts[pts.length - 1].value : cfg.baseline
-    const prev = pts.length > 1 ? pts[pts.length - 2].value : last
-    const target = alarmTarget(cfg, now)
-    let value =
-      last +
-      (target !== null ? (target - last) * 0.28 : (last - prev) * 0.25) +
-      (Math.random() - 0.5) * cfg.volatility * 0.4
-    if (cfg.spikeChance && Math.random() < cfg.spikeChance) value += cfg.spike ?? 0
-    const upper = target !== null ? Math.max(cfg.max, target * 1.06) : cfg.max
-    value = clamp(value, cfg.min, upper)
-    const rounded = round(value, cfg.decimals)
-
-    if (pts.length && pts[pts.length - 1].label === label) {
-      return { id: s.id, points: pts.slice(0, -1).concat({ label, value: rounded }) }
-    }
-    return { id: s.id, points: pts.concat({ label, value: rounded }).slice(-maxPoints) }
-  })
-}
-
-export function recentActivity(series: SensorSeries[]): string {
-  let bestName = ''
-  let bestAbs = 0
-  let bestDir = 1
-
-  for (const s of series) {
-    const points = s.points
-    if (points.length < 8) continue
-    const prev = points.slice(-7, -1)
-    const last = points[points.length - 1].value
-    const avg = prev.reduce((a, b) => a + b.value, 0) / prev.length
-    if (avg === 0) continue
-    const rel = (last - avg) / avg
-    const abs = Math.abs(rel)
-    if (abs > bestAbs) {
-      bestAbs = abs
-      bestDir = rel >= 0 ? 1 : -1
-      bestName = SENSORS[s.id].name
-    }
+  for (const p of sorted) {
+    const idx = Math.min(bucketCount - 1, Math.max(0, Math.floor((p.t - start) / size)))
+    sums[idx] += p.value
+    counts[idx] += 1
   }
 
-  if (!bestName) return 'No recent activity'
-  const verb = bestAbs >= 0.05 ? (bestDir > 0 ? 'rising' : 'dropping') : 'stable'
-  return `${bestName} is ${verb}`
+  const out: SeriesPoint[] = []
+  let carry: number | null = null
+
+  for (let i = 0; i < bucketCount; i++) {
+    const value: number | null = counts[i] > 0 ? sums[i] / counts[i] : carry
+    if (value === null) continue
+    carry = value
+    const t = Math.round(start + i * size)
+    out.push({ t, value, label: formatRangeLabel(t, range)})
+  }
+
+  return out
 }
 
 export function levelFor(cfg: SensorConfig, value: number): { level: StatusLevel; color: string; label: string } {

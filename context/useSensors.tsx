@@ -1,17 +1,13 @@
 'use client'
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { SensorId, SensorSeries, StatusLevel, SensorConfig, ReportLog } from '@/lib/dashboardData'
-import {
-  SENSORS,
-  HUMIDITY_CONFIG,
-  formatValue,
-  generateSeries,
-  humidityFromTemp,
-  levelFor,
-  snapshotReadings,
-  tickSeries,
-} from '@/lib/dashboardData'
+import type { SensorId, SensorSeries, SeriesPoint } from '@/lib/dashboardData'
+import { isApiConfigured } from '@/lib/api/config'
+import { fetchEvents } from '@/lib/api/events'
+import { fetchLatestSeries } from '@/lib/api/telemetry'
+import { connectLiveTelemetry, type SensorPoint, type FusionData } from '@/lib/api/realtime'
+import { refreshAccessToken } from '@/lib/api/auth'
+import { onForegroundPush, getStoredPushToken, isPushConfigured, type PushAlert } from '@/lib/api/push'
 
 export type EventLevel = 'WARNING' | 'CRITICAL'
 export type ToastLevel = EventLevel | 'SUCCESS'
@@ -37,75 +33,37 @@ export interface SensorToast {
 
 interface SensorsContextType {
   series: SensorSeries[]
+  /** Fusion fields from the most recent live reading — used to react to tier transitions. */
+  lastFusion: FusionData | null
   notifications: SensorEvent[]
   unreadCount: number
   markAllRead: () => void
   toasts: SensorToast[]
   dismissToast: (id: string) => void
   pushToast: (title: string, message: string) => void
-  reports: ReportLog[]
 }
 
-const STORAGE_KEY = 'preventa.notifications'
+const STORAGE_KEY = 'preventa.notifications.v2'
 const MAX_EVENTS = 50
 const MAX_TOASTS = 3
-const MAX_REPORTS = 3
 const TOAST_LIFETIME_MS = 6000
-const BASE_DATE = new Date(2026, 11, 1, 12, 0, 0)
+const EVENT_POLL_MS = 5000
+const BACKFILL_POLL_MS = 30_000
 
 const SensorsContext = createContext<SensorsContextType | undefined>(undefined)
 
-function buildEvent(
-  sensorId: SensorId,
-  level: EventLevel,
-  value: number,
-  timestamp: number,
-  read = false,
-  cfg: SensorConfig = SENSORS[sensorId],
-): SensorEvent {
-  const valueStr = formatValue(value, cfg.decimals)
-  return {
-    id: `${sensorId}-${level}-${timestamp}-${Math.round(Math.random() * 1e5)}`,
-    sensorId,
-    level,
-    value,
-    unit: cfg.unit,
-    title: `${cfg.name} ${level === 'CRITICAL' ? 'Critical Alert' : 'Warning'}`,
-    message: `${cfg.name} at ${valueStr} ${cfg.unit} — ${level.toLowerCase()} threshold ${cfg.thresholdWarning} ${cfg.unit} exceeded`,
-    timestamp,
-    read,
+function loadStoredEvents(): SensorEvent[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as SensorEvent[]
+      if (Array.isArray(parsed)) return parsed
+    }
+  } catch {
+    /* ignore corrupted storage */
   }
-}
-
-function seedEvents(): SensorEvent[] {
-  const now = Date.now()
-  const M = 60_000
-  const mk = (sensorId: SensorId, level: EventLevel, value: number, minutesAgo: number): SensorEvent => {
-    const e = buildEvent(sensorId, level, value, now - minutesAgo * M)
-    return { ...e, id: `seed-${sensorId}`, read: true }
-  }
-  return [mk('dht22', 'WARNING', 48, 26), mk('mq7', 'CRITICAL', 118, 58), mk('acs712', 'WARNING', 7.2, 95)]
-    .concat([{ ...buildEvent('dht22', 'WARNING', 72, now - 40 * M, true, HUMIDITY_CONFIG), id: 'seed-humidity' }])
-}
-
-function seedReports(): ReportLog[] {
-  const now = Date.now()
-  const M = 60_000
-  const H = 3_600_000
-  const cfgFor = (label: string) =>
-    label === HUMIDITY_CONFIG.name ? HUMIDITY_CONFIG : (Object.values(SENSORS).find((c) => c.name === label) as SensorConfig)
-  const mk = (timestamp: number, values: Record<string, number>): ReportLog => {
-    const readings = Object.entries(values).map(([label, value]) => {
-      const cfg = cfgFor(label)
-      return { label, value, unit: cfg.unit, decimals: cfg.decimals, level: levelFor(cfg, value).level }
-    })
-    return { id: `seed-report-${timestamp}`, timestamp, readings }
-  }
-  return [
-    mk(now - 5 * M, { 'Gas Concentration': 118, Temperature: 48.2, Humidity: 65, 'Power Usage': 6.5 }),
-    mk(now - 38 * M, { 'Gas Concentration': 62, Temperature: 39.5, Humidity: 42, 'Power Usage': 7.4 }),
-    mk(now - 2 * H, { 'Gas Concentration': 45, Temperature: 26.1, Humidity: 38, 'Power Usage': 4.2 }),
-  ]
+  return []
 }
 
 function tryBrowserNotify(title: string, body: string) {
@@ -152,79 +110,152 @@ function tryBrowserNotify(title: string, body: string) {
 }
 
 export function SensorProvider({ children }: { children: ReactNode }) {
-  const [series, setSeries] = useState<SensorSeries[]>(() => generateSeries(BASE_DATE))
-  const [notifications, setNotifications] = useState<SensorEvent[]>(() => {
-    if (typeof window === 'undefined') return seedEvents()
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (raw) {
-        const parsed = JSON.parse(raw) as SensorEvent[]
-        if (Array.isArray(parsed) && parsed.length) return parsed
-      }
-    } catch {
-      /* ignore corrupted storage */
-    }
-    return seedEvents()
-  })
+  const [series, setSeries] = useState<SensorSeries[]>([])
+  const [lastFusion, setLastFusion] = useState<FusionData | null>(null)
+  const [notifications, setNotifications] = useState<SensorEvent[]>(loadStoredEvents)
   const [toasts, setToasts] = useState<SensorToast[]>([])
-  const [reports, setReports] = useState<ReportLog[]>(() => seedReports())
 
-  const processedRef = useRef<SensorSeries[] | null>(null)
-  const prevStatusRef = useRef<Partial<Record<SensorId, StatusLevel>>>({})
-  const prevHumidityRef = useRef<StatusLevel | undefined>(undefined)
+  const seenEventsRef = useRef<Set<string>>(new Set())
+  const eventsSeededRef = useRef(false)
+  const wsRef = useRef<WebSocket | null>(null)
+  const wsReconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const buffersRef = useRef<Record<SensorId, SeriesPoint[]>>({
+    mq7: [],
+    dht22: [],
+    acs712: [],
+    humidity: [],
+  })
+
+  const MAX_BUFFER = 2000
+
+  function pushPoint(id: SensorId, point: SeriesPoint) {
+    const buf = buffersRef.current[id]
+    if (!buf) return
+    buf.push(point)
+    if (buf.length > MAX_BUFFER) buf.shift()
+  }
+
+  function rebuildSeries() {
+    const out: SensorSeries[] = []
+    for (const id of Object.keys(buffersRef.current) as SensorId[]) {
+      out.push({ id, points: [...buffersRef.current[id]] })
+    }
+    setSeries(out)
+  }
 
   useEffect(() => {
-    const id = setInterval(() => setSeries((prev) => tickSeries(prev)), 2000)
-    return () => clearInterval(id)
+    if (!isApiConfigured()) return
+
+    let cancelled = false
+
+    async function connectWS() {
+      const token = localStorage.getItem('preventa.token')
+      if (!token) return
+
+      const ws = connectLiveTelemetry(
+        token,
+        (points: SensorPoint, fusion: FusionData) => {
+          if (cancelled) return
+          pushPoint('mq7', points.mq7)
+          pushPoint('dht22', points.dht22)
+          pushPoint('acs712', points.acs712)
+          pushPoint('humidity', points.humidity)
+          setLastFusion(fusion)
+          rebuildSeries()
+        },
+        (code) => {
+          if (cancelled) return
+          if (code === 4401) {
+            void refreshAccessToken().then((newToken) => {
+              if (newToken && !cancelled) connectWS()
+            })
+          } else {
+            scheduleReconnect()
+          }
+        }
+      )
+      wsRef.current = ws
+    }
+
+    function scheduleReconnect() {
+      if (wsReconnectTimeoutRef.current) clearTimeout(wsReconnectTimeoutRef.current)
+      wsReconnectTimeoutRef.current = setTimeout(() => {
+        if (!cancelled) connectWS()
+      }, 3000)
+    }
+
+    connectWS()
+
+    async function backfill() {
+      if (cancelled) return
+      try {
+        const latest = await fetchLatestSeries()
+        if (cancelled) return
+        const wsOpen = typeof WebSocket !== 'undefined' && wsRef.current?.readyState === WebSocket.OPEN
+        let changed = false
+        for (const s of latest) {
+          if (!s.points.length) continue
+          if (wsOpen && buffersRef.current[s.id].length) continue
+          buffersRef.current[s.id] = [...s.points].slice(-MAX_BUFFER)
+          changed = true
+        }
+        if (changed) rebuildSeries()
+      } catch {
+        /* keep local buffer */
+      }
+    }
+
+    void backfill()
+    const backfillId = setInterval(backfill, BACKFILL_POLL_MS)
+
+    return () => {
+      cancelled = true
+      if (wsRef.current) wsRef.current.close()
+      if (wsReconnectTimeoutRef.current) clearTimeout(wsReconnectTimeoutRef.current)
+      clearInterval(backfillId)
+    }
   }, [])
 
   useEffect(() => {
-    if (processedRef.current === series) return
-    processedRef.current = series
+    if (!isApiConfigured()) return
+    let cancelled = false
 
-    const fresh: SensorEvent[] = []
-    const now = Date.now()
-    ;(Object.keys(SENSORS) as SensorId[]).forEach((id) => {
-      const cfg = SENSORS[id]
-      const point = series.find((s) => s.id === id)?.points.at(-1)
-      if (!point) return
-      const status = levelFor(cfg, point.value).level
-      const before = prevStatusRef.current[id]
-      const escalated =
-        before === undefined ||
-        (before === 'NOMINAL' && status !== 'NOMINAL') ||
-        (before === 'WARNING' && status === 'CRITICAL')
-      if (status !== 'NOMINAL' && escalated) {
-        fresh.push(buildEvent(id, status === 'CRITICAL' ? 'CRITICAL' : 'WARNING', point.value, now))
-      }
-      prevStatusRef.current[id] = status
+    const poll = async () => {
+      try {
+        const events = await fetchEvents(MAX_EVENTS)
+        if (cancelled || !events.length) return
 
-      if (id === 'dht22') {
-        const hValue = humidityFromTemp(point.value)
-        const hStatus = levelFor(HUMIDITY_CONFIG, hValue).level
-        const hBefore = prevHumidityRef.current
-        const hEscalated =
-          hBefore === undefined ||
-          (hBefore === 'NOMINAL' && hStatus !== 'NOMINAL') ||
-          (hBefore === 'WARNING' && hStatus === 'CRITICAL')
-        if (hStatus !== 'NOMINAL' && hEscalated) {
-          fresh.push(buildEvent('dht22', hStatus === 'CRITICAL' ? 'CRITICAL' : 'WARNING', hValue, now, false, HUMIDITY_CONFIG))
+        if (!eventsSeededRef.current) {
+          eventsSeededRef.current = true
+          events.forEach((e) => seenEventsRef.current.add(e.id))
+          setNotifications((prev) => {
+            const known = new Set(prev.map((n) => n.id))
+            const fresh = events.filter((e) => !known.has(e.id))
+            return fresh.length ? [...fresh, ...prev].slice(0, MAX_EVENTS) : prev
+          })
+          return
         }
-        prevHumidityRef.current = hStatus
-      }
-    })
 
-    if (fresh.length) {
-      setNotifications((prev) => [...fresh, ...prev].slice(0, MAX_EVENTS))
-      setToasts((prev) =>
-        [...fresh.map((e) => ({ id: e.id, level: e.level, title: e.title, message: e.message })), ...prev].slice(0, MAX_TOASTS),
-      )
-      setReports((prev) =>
-        [{ id: `report-${now}-${Math.round(Math.random() * 1e5)}`, timestamp: now, readings: snapshotReadings(series) }, ...prev].slice(0, MAX_REPORTS),
-      )
-      fresh.forEach((e) => tryBrowserNotify(e.title, e.message))
+        const fresh = events.filter((e) => !seenEventsRef.current.has(e.id))
+        if (!fresh.length) return
+        fresh.forEach((e) => seenEventsRef.current.add(e.id))
+        setNotifications((prev) => [...fresh, ...prev].slice(0, MAX_EVENTS))
+        setToasts((prev) =>
+          [...fresh.map((e) => ({ id: e.id, level: e.level, title: e.title, message: e.message })), ...prev].slice(0, MAX_TOASTS),
+        )
+        fresh.forEach((e) => tryBrowserNotify(e.title, e.message))
+      } catch {
+        /* keep local history if the events fetch fails */
+      }
     }
-  }, [series])
+
+    void poll()
+    const id = setInterval(poll, EVENT_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [])
 
   useEffect(() => {
     try {
@@ -233,6 +264,38 @@ export function SensorProvider({ children }: { children: ReactNode }) {
       /* ignore storage failures */
     }
   }, [notifications])
+
+  // Foreground Firebase push (Phase 8): render incoming FCM messages through the same
+  // toast + browser-notification pipeline. Only active after the owner enables push.
+  useEffect(() => {
+    if (!isApiConfigured()) return
+    let cancelled = false
+    let unsubscribe: (() => void) | null = null
+
+    void (async () => {
+      if (!isPushConfigured() || !getStoredPushToken()) return
+      unsubscribe = await onForegroundPush((alert: PushAlert) => {
+        if (cancelled) return
+        setToasts((prev) =>
+          [
+            {
+              id: `push-${Date.now()}-${Math.round(Math.random() * 1e5)}`,
+              level: alert.level ?? 'WARNING',
+              title: alert.title,
+              message: alert.body,
+            },
+            ...prev,
+          ].slice(0, MAX_TOASTS),
+        )
+        tryBrowserNotify(alert.title, alert.body)
+      })
+    })()
+
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+    }
+  }, [])
 
   const markAllRead = useCallback(() => setNotifications((prev) => prev.map((n) => ({ ...n, read: true }))), [])
 
@@ -256,8 +319,8 @@ export function SensorProvider({ children }: { children: ReactNode }) {
   }, [toasts, dismissToast])
 
   const value = useMemo(
-    () => ({ series, notifications, unreadCount, markAllRead, toasts, dismissToast, pushToast, reports }),
-    [series, notifications, unreadCount, markAllRead, toasts, dismissToast, pushToast, reports],
+    () => ({ series, lastFusion, notifications, unreadCount, markAllRead, toasts, dismissToast, pushToast }),
+    [series, lastFusion, notifications, unreadCount, markAllRead, toasts, dismissToast, pushToast],
   )
 
   return (

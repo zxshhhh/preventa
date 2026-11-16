@@ -1,13 +1,35 @@
 ﻿'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { lockScroll } from '@/lib/scrollLock'
 import { useSensors, type SensorEvent } from '@/context/useSensors'
-import { SENSORS, HUMIDITY_CONFIG, levelFor, formatValue, humidityFromTemp, type SensorId, type StatusLevel } from '@/lib/dashboardData'
+import { SENSORS, levelFor, formatValue, type SensorId, type StatusLevel } from '@/lib/dashboardData'
+import { fetchNotifications, type DeliveryActivity } from '@/lib/api/notifications'
+import { isApiConfigured } from '@/lib/api/config'
 
 const LEVEL_DOT: Record<string, string> = {
   WARNING: '#FBBF24',
   CRITICAL: '#F87171',
+}
+
+const CHANNEL_LABEL: Record<DeliveryActivity['channel'], string> = {
+  push: 'PUSH',
+  sms: 'SMS',
+  unknown: 'CHANNEL',
+}
+
+const CHANNEL_DOT: Record<DeliveryActivity['channel'], string> = {
+  push: '#60A5FA',
+  sms: '#34D399',
+  unknown: '#6B7280',
+}
+
+const STATUS_PILL: Record<DeliveryActivity['status'], string> = {
+  pending: 'text-amber-300 bg-amber-400/10',
+  accepted: 'text-sky-300 bg-sky-400/10',
+  delivered: 'text-emerald-300 bg-emerald-400/10',
+  failed: 'text-(--red-indicator) bg-(--red-indicator)/10',
+  unknown: 'text-gray-400 bg-white/5',
 }
 
 function formatTime(timestamp: number): string {
@@ -44,6 +66,95 @@ interface Props {
   onClose: () => void
 }
 
+function ActivityRow({ activity }: { activity: DeliveryActivity }) {
+  const stamp = (value: string | null) => (value ? new Date(value).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }) : null)
+  const sent = stamp(activity.sentAt)
+  const delivered = activity.deliveredAt ? stamp(activity.deliveredAt) : null
+
+  return (
+    <div className="p-3 flex items-start gap-3">
+      <span className="w-2.5 h-2.5 rounded-full mt-1 shrink-0" style={{ backgroundColor: CHANNEL_DOT[activity.channel] }} />
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-semibold text-gray-100">
+          {CHANNEL_LABEL[activity.channel]} · event {activity.eventId ?? '—'}
+        </p>
+        <p className="text-[11px] text-gray-500 mt-0.5 font-mono">
+          {sent ? `sent ${sent}` : 'not sent yet'}
+          {delivered ? ` · delivered ${delivered}` : ''}
+          {activity.contactId != null ? ` · contact ${activity.contactId}` : ''}
+        </p>
+      </div>
+      <span className={'text-[10px] font-extrabold px-2 py-0.5 rounded-full whitespace-nowrap ' + STATUS_PILL[activity.status]}>
+        {activity.statusLabel}
+      </span>
+    </div>
+  )
+}
+
+function DeliveryActivitySection() {
+  const [activity, setActivity] = useState<DeliveryActivity[]>([])
+  const [state, setState] = useState<'loading' | 'ready' | 'error' | 'unconfigured'>('loading')
+
+  useEffect(() => {
+    let cancelled = false
+    // Deferred so the initial setState calls aren't synchronous inside the effect.
+    const id = setTimeout(() => {
+      if (!isApiConfigured()) {
+        setState('unconfigured')
+        return
+      }
+      setState('loading')
+      void fetchNotifications()
+        .then((items) => {
+          if (cancelled) return
+          setActivity(items)
+          setState('ready')
+        })
+        .catch(() => {
+          if (!cancelled) setState('error')
+        })
+    }, 0)
+    return () => {
+      cancelled = true
+      clearTimeout(id)
+    }
+  }, [])
+
+  if (state === 'unconfigured') return null
+
+  return (
+    <>
+      <div className="flex items-center justify-between p-3 pb-1">
+        <p className="text-[10px] font-extrabold tracking-wide text-gray-500">DELIVERY ACTIVITY</p>
+        {activity.length > 0 && (
+          <span className="text-[10px] font-bold text-gray-500">{activity.length} sent</span>
+        )}
+      </div>
+      {state === 'loading' ? (
+        <p className="px-3 py-4 text-center text-xs text-gray-500">Loading delivery activity…</p>
+      ) : state === 'error' ? (
+        <p className="px-3 py-4 text-center text-xs text-gray-500">Delivery activity is unavailable right now.</p>
+      ) : activity.length === 0 ? (
+        <p className="px-3 py-4 text-center text-xs text-gray-500">
+          No delivery records yet. SMS and push sends will appear here.
+        </p>
+      ) : (
+        <div className="divide-y divide-white/10">
+          {activity.map((a) => (
+            <ActivityRow key={a.id} activity={a} />
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
+
 export default function NotificationModal({ show, onClose }: Props) {
   const { series, notifications, markAllRead } = useSensors()
 
@@ -71,20 +182,6 @@ export default function NotificationModal({ show, onClose }: Props) {
       },
     ]
   })
-
-  const humidityPoint = series.find((s) => s.id === 'dht22')?.points.at(-1)
-  if (humidityPoint) {
-    const hValue = humidityFromTemp(humidityPoint.value)
-    const hStatus = levelFor(HUMIDITY_CONFIG, hValue)
-    if (hStatus.level !== 'NOMINAL') {
-      activeCrossings.push({
-        id: 'dht22-humidity',
-        level: hStatus.level,
-        title: 'Humidity',
-        detail: `${formatValue(hValue, HUMIDITY_CONFIG.decimals)} ${HUMIDITY_CONFIG.unit} — ${hStatus.label}`,
-      })
-    }
-  }
 
   const renderBody = (mobile: boolean) => (
     <>
@@ -125,6 +222,8 @@ export default function NotificationModal({ show, onClose }: Props) {
             ))}
           </div>
         )}
+
+        <DeliveryActivitySection />
       </div>
       <div className="p-3 text-center border-t border-white/10 shrink-0">
         <button className="btn-ghost btn-sm">{mobile ? 'View all history' : ''}</button>

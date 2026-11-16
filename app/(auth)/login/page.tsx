@@ -3,7 +3,7 @@ import Image from 'next/image'
 
 const features = [
   'Real-time sensor monitoring',
-  'ESP32-CAM surveillance archive',
+  'Camera surveillance archive',
   'Instant fire & smoke alerts',
 ]
 
