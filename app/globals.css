@@ -240,3 +240,86 @@ input[type="checkbox"]:checked::before {
 .scroll-thin::-webkit-scrollbar-track {
     background: transparent;
 }
+
+/* ---------- Light theme ---------- */
+
+html.light {
+    color-scheme: light;
+
+    --primary-text-color: #1E293B;
+    --gray-text-color: #64748B;
+
+    --bg-color: #F1F3F8;
+    --surface-color: rgba(15, 23, 42, 0.035);
+    --surface-border: rgba(15, 23, 42, 0.12);
+    --surface-solid: #FFFFFF;
+
+    --input-color: #FFFFFF;
+
+    --color-white: #0F172A;
+    --color-gray-100: #0F172A;
+    --color-gray-200: #1E293B;
+    --color-gray-300: #334155;
+    --color-gray-400: #475569;
+    --color-gray-500: #64748B;
+    --color-emerald-300: #059669;
+    --color-amber-300: #B45309;
+    --color-red-300: #DC2626;
+}
+
+html.light :is(.bg-ember, .btn-primary, .bg-red-500, .bg-gray-800, .bg-black\/40) {
+    --color-white: #ffffff;
+    color: #ffffff;
+}
+
+html.light body {
+    background-color: var(--bg-color);
+    background-image:
+        radial-gradient(64rem 40rem at -12% -22%, rgba(255, 110, 60, 0.10), transparent 65%),
+        radial-gradient(52rem 36rem at 112% 112%, rgba(96, 165, 250, 0.10), transparent 65%),
+        linear-gradient(rgba(15, 23, 42, 0.038) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(15, 23, 42, 0.038) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
+    background-attachment: fixed;
+}
+
+html.light .panel-card {
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 16px 36px -18px rgba(15, 23, 42, 0.22);
+}
+
+html.light * {
+    scrollbar-color: rgba(15, 23, 42, 0.3) transparent;
+}
+
+html.light *::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.05);
+}
+
+html.light *::-webkit-scrollbar-thumb {
+    background: rgba(15, 23, 42, 0.22);
+    border-radius: 9999px;
+    border: 2px solid var(--bg-color);
+}
+
+html.light *::-webkit-scrollbar-thumb:hover {
+    background: rgba(15, 23, 42, 0.36);
+}
+
+html.light .scroll-thin::-webkit-scrollbar-thumb {
+    background: rgba(15, 23, 42, 0.2);
+}
+
+html.light input[type="checkbox"] {
+    background-color: rgba(15, 23, 42, 0.06);
+}
+
+html.light .bg-white\/5 { background-color: rgb(15 23 42 / 0.06); }
+html.light .bg-white\/10 { background-color: rgb(15 23 42 / 0.08); }
+html.light .border-white\/10 { border-color: rgb(15 23 42 / 0.12); }
+html.light .border-white\/15 { border-color: rgb(15 23 42 / 0.16); }
+html.light .ring-white\/10 { --tw-ring-color: rgb(15 23 42 / 0.1); }
+html.light .hover\:bg-white\/5:hover { background-color: rgb(15 23 42 / 0.06); }
+html.light .hover\:bg-white\/10:hover { background-color: rgb(15 23 42 / 0.08); }
+html.light .focus-visible\:bg-white\/10:focus-visible { background-color: rgb(15 23 42 / 0.08); }
+html.light .hover\:text-white:hover { color: rgb(15 23 42 / 0.9); }
+html.light .btn-segment-active { background-color: rgb(15 23 42 / 0.08); }

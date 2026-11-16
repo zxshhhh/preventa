@@ -78,6 +78,7 @@ export default function DashboardMetricCard({
   const xAxisY = M.top + innerH
   const labelIdx =
     chartPoints.length > 2 ? [0, Math.floor((chartPoints.length - 1) / 2), chartPoints.length - 1] : []
+  const labelAnchor = (i: number) => (i === 0 ? 'start' : i === chartPoints.length - 1 ? 'end' : 'middle')
 
   const fmt = (v: number) => formatValue(v, decimals)
 
@@ -194,7 +195,7 @@ export default function DashboardMetricCard({
               key={i}
               x={xAt(i)}
               y={xAxisY + 10}
-              textAnchor="middle"
+              textAnchor={labelAnchor(i)}
               fontSize="8"
               fill="#64748B"
               fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
@@ -214,7 +215,7 @@ export default function DashboardMetricCard({
             </g>
           )}
         </svg>
-
+        
         {hi !== null && chartPoints[hi] && (
           <div
             className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full bg-gray-800 ring-1 ring-white/10 text-white rounded-lg px-3 py-2 text-xs shadow-xl whitespace-nowrap"

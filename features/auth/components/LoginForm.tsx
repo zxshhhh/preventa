@@ -2,33 +2,50 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { login as apiLogin } from '@/lib/api/auth'
+import { ApiError } from '@/lib/api/client'
 
 export default function LoginForm() {
   const router = useRouter()
-  const [email, setEmail] = useState('')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [rememberMe, setRememberMe] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
     const t = window.setTimeout(() => {
       const remembered = localStorage.getItem('rememberedEmail')
       if (remembered) {
-        setEmail(remembered)
+        setUsername(remembered)
         setRememberMe(true)
       }
     }, 0)
     return () => window.clearTimeout(t)
   }, [])
 
-  const login = (e: React.SyntheticEvent) => {
-    e.preventDefault()
+  const remember = () => {
     if (rememberMe) {
-      localStorage.setItem('rememberedEmail', email)
+      localStorage.setItem('rememberedEmail', username)
     } else {
       localStorage.removeItem('rememberedEmail')
     }
-    router.push('/activity')
+  }
+
+  const login = async (e: React.SyntheticEvent) => {
+    e.preventDefault()
+    setError(null)
+    setSubmitting(true)
+    try {
+      await apiLogin(username, password)
+      remember()
+      router.push('/activity')
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Login failed. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -42,18 +59,18 @@ export default function LoginForm() {
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" width="16" height="16" className="text-gray-400">
             <path d="M5 21C5 17.134 8.13401 14 12 14C15.866 14 19 17.134 19 21M16 7C16 9.20914 14.2091 11 12 11C9.79086 11 8 9.20914 8 7C8 4.79086 9.79086 3 12 3C14.2091 3 16 4.79086 16 7Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
-          <label htmlFor="email" className="text-sm font-bold text-gray-300">EMAIL</label>
+          <label htmlFor="username" className="text-sm font-bold text-gray-300">USERNAME</label>
         </div>
         <div className="relative">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" width="18" height="18" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
             <path d="M3 8L10.8906 13.2604C11.5624 13.7083 12.4376 13.7083 13.1094 13.2604L21 8M5 19H19C20.1046 19 21 18.1046 21 17V7C21 5.89543 20.1046 5 19 5H5C3.89543 5 3 5.89543 3 7V17C3 18.1046 3.89543 19 5 19Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            id="email"
-            placeholder="you@example.com"
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            id="username"
+            placeholder="e.g. edimar_user"
             required
             className="w-full h-11 sm:h-12 rounded-lg pl-10 pr-4 text-sm bg-white/5 border border-white/10 text-gray-100 placeholder:text-gray-500 focus:outline-none focus:bg-white/10 focus:border-(--secondary-color) focus:ring-2 focus:ring-(--secondary-color)/30 transition-all duration-300 ease-in-out"
           />
@@ -109,13 +126,19 @@ export default function LoginForm() {
 
       <button
         type="submit"
-        className="btn-primary btn-lg w-full"
+        disabled={submitting}
+        className="btn-primary btn-lg w-full disabled:opacity-60 disabled:cursor-wait"
       >
-        ACCESS SYSTEM
+        {submitting ? 'SIGNING IN...' : 'LOGIN TO PREVENTA'}
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M5 12H19M13 6L19 12L13 18" />
         </svg>
       </button>
+      {error && (
+        <p className="text-xs font-semibold text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
+          {error}
+        </p>
+      )}
     </form>
   )
 }

@@ -3,20 +3,21 @@ import DashboardMetricCard from './ui/DashboardMetricCard'
 import type { SensorId, SensorSeries, SeriesPoint, TrendRange } from '@/lib/dashboardData'
 import {
   SENSORS,
-  HUMIDITY_CONFIG,
   levelFor,
   deltaPercent,
   formatValue,
-  deriveHumidity,
 } from '@/lib/dashboardData'
 
-const RANGES: TrendRange[] = ['24H', '7D', '30D']
+const RANGES: TrendRange[] = ['1H', '24H', '7D', '30D']
+
+const CARD_ORDER: SensorId[] = ['mq7', 'dht22', 'humidity', 'acs712']
 
 interface Props {
   series: SensorSeries[]
   chartSeries: SensorSeries[]
   range: TrendRange
   onRangeChange: (r: TrendRange) => void
+  loading?: boolean
 }
 
 const ICONS: Record<SensorId, ReactNode> = {
@@ -36,13 +37,12 @@ const ICONS: Record<SensorId, ReactNode> = {
       <path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" />
     </svg>
   ),
+  humidity: (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z" />
+    </svg>
+  ),
 }
-
-const HUMIDITY_ICON = (
-  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z" />
-  </svg>
-)
 
 interface CardData {
   key: string
@@ -61,20 +61,19 @@ interface CardData {
   thresholdWarning: number
 }
 
-export default function DashboardSensorCards({ series, chartSeries, range, onRangeChange }: Props) {
-  const cards: CardData[] = []
-
-  for (const id of Object.keys(SENSORS) as SensorId[]) {
+export default function DashboardSensorCards({ series, chartSeries, range, onRangeChange, loading }: Props) {
+  const cards: CardData[] = CARD_ORDER.map((id) => {
     const cfg = SENSORS[id]
     const points = series.find((x) => x.id === id)?.points ?? []
     const last = points[points.length - 1]
     const current = last?.value ?? cfg.baseline
-    const chartPoints = chartSeries.find((x) => x.id === id)?.points ?? points
-    cards.push({
+    const chartPoints = chartSeries.find((x) => x.id === id)?.points ?? []
+
+    return {
       key: id,
       icon: ICONS[id],
       title: cfg.name,
-      value: formatValue(current, cfg.decimals),
+      value: last ? formatValue(current, cfg.decimals) : '-',
       current,
       unit: cfg.unit,
       decimals: cfg.decimals,
@@ -85,29 +84,8 @@ export default function DashboardSensorCards({ series, chartSeries, range, onRan
       statusText: `WARNING > ${cfg.thresholdWarning} ${cfg.unit}`,
       thresholdNominal: cfg.thresholdNominal,
       thresholdWarning: cfg.thresholdWarning,
-    })
-    if (id === 'dht22' && points.length) {
-      const hPoints = deriveHumidity(points)
-      const hCurrent = hPoints[hPoints.length - 1].value
-      const hChartPoints = chartPoints.length ? deriveHumidity(chartPoints) : hPoints
-      cards.push({
-        key: 'humidity',
-        icon: HUMIDITY_ICON,
-        title: HUMIDITY_CONFIG.name,
-        value: formatValue(hCurrent, HUMIDITY_CONFIG.decimals),
-        current: hCurrent,
-        unit: HUMIDITY_CONFIG.unit,
-        decimals: HUMIDITY_CONFIG.decimals,
-        delta: deltaPercent(hPoints),
-        chartPoints: hChartPoints,
-        color: HUMIDITY_CONFIG.color,
-        status: levelFor(HUMIDITY_CONFIG, hCurrent),
-        statusText: `WARNING > ${HUMIDITY_CONFIG.thresholdWarning} ${HUMIDITY_CONFIG.unit}`,
-        thresholdNominal: HUMIDITY_CONFIG.thresholdNominal,
-        thresholdWarning: HUMIDITY_CONFIG.thresholdWarning,
-      })
     }
-  }
+  })
 
   return (
     <div className="flex flex-col gap-4">
@@ -128,7 +106,6 @@ export default function DashboardSensorCards({ series, chartSeries, range, onRan
           ))}
         </div>
       </div>
-
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-5">
         {cards.map(({ key, ...d }) => (
           <DashboardMetricCard key={key} {...d} />

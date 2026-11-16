@@ -5,7 +5,9 @@ import NotificationModal from '@/components/NotificationModal'
 import { useSidebar } from '@/context/useSidebar'
 import { useSensors } from '@/context/useSensors'
 import { useHydrated } from '@/lib/useHydrated'
-import { systemOnline } from '@/lib/dashboardData'
+import { isApiConfigured } from '@/lib/api/config'
+import { logout } from '@/lib/api/auth'
+import { fetchSystemStatus } from '@/lib/api/system'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
@@ -83,16 +85,35 @@ export default function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const [showNotifications, setShowNotifications] = useState(false)
-  const [now, setNow] = useState<Date | null>(null)
+  const [liveOnline, setLiveOnline] = useState<boolean | null>(null)
 
   useEffect(() => {
-    if (!hydrated) return
-    const id = setInterval(() => setNow(new Date()), 2000)
-    return () => clearInterval(id)
+    if (!hydrated || !isApiConfigured()) return
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const online = await fetchSystemStatus()
+        if (!cancelled) setLiveOnline(online)
+      } catch {
+        /* keep the last known connection status */
+      }
+    }
+    void poll()
+    const id = setInterval(poll, 10_000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
   }, [hydrated])
 
-  const connected = now ? systemOnline(now) : true
+  const connected = liveOnline ?? true
   const statusTitle = connected ? 'System connected to device' : 'System connection lost'
+
+  const handleLogout = () => {
+    logout()
+    close()
+    router.push('/login')
+  }
 
   const badge = hydrated && unreadCount > 0 && (
     <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
@@ -162,7 +183,7 @@ export default function Sidebar() {
             </nav>
             <div className="p-3 border-t border-white/10 shrink-0">
               <button
-                onClick={() => router.push('/login')}
+                onClick={handleLogout}
                 title="Logout"
                 className="w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors text-gray-400 hover:bg-white/5 hover:text-(--secondary-color)"
               >
@@ -224,7 +245,7 @@ export default function Sidebar() {
             <Image src="/Profile-sample.png" alt="profile" width={40} height={40} className="rounded-full bg-white/10 w-10 h-10 shrink-0" />
           </Link>
           <button
-            onClick={() => router.push('/login')}
+            onClick={handleLogout}
             title="Logout"
             className="btn-icon w-10 h-10 border border-white/15 mx-auto"
           >

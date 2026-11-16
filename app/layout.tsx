@@ -1,7 +1,10 @@
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
 import { SidebarProvider } from '@/context/useSidebar'
+import { ThemeProvider } from '@/context/useTheme'
 import PwaRegister from '@/components/PwaRegister'
+
+const THEME_INIT_SCRIPT = `try{var t=localStorage.getItem('preventa.theme');if(t==='light')document.documentElement.classList.add('light')}catch(e){}`
 
 export const metadata: Metadata = {
   title: 'Preventa',
@@ -38,11 +41,16 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="h-full">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body className="min-h-full">
-        <SidebarProvider>
-          <PwaRegister />
-          {children}
-        </SidebarProvider>
+        <ThemeProvider>
+          <SidebarProvider>
+            <PwaRegister />
+            {children}
+          </SidebarProvider>
+        </ThemeProvider>
       </body>
     </html>
   )
