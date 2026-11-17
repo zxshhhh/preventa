@@ -28,7 +28,7 @@ export default function DashboardHeader() {
       {hydrated && (
         <div className="mt-1 text-xs text-gray-500 leading-tight">
           <p className="font-bold text-gray-300">{dateStr}</p>
-          <p className="font-mono">{timeStr}</p>
+          <p className="tnum">{timeStr}</p>
         </div>
       )}
     </div>

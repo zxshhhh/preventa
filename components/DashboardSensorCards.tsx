@@ -1,24 +1,28 @@
-﻿import type { ReactNode } from 'react'
+﻿import { useEffect, useState, type ReactNode } from 'react'
 import DashboardMetricCard from './ui/DashboardMetricCard'
-import type { SensorId, SensorSeries, SeriesPoint, TrendRange } from '@/lib/dashboardData'
+import ChartHoverOverlay from './ui/ChartHoverOverlay'
+import { ChartHoverProvider, useChartHoverApi } from './ui/ChartHoverProvider'
+import type { SensorId, SensorSeries, SeriesPoint, StatusLevel, TrendRange } from '@/lib/dashboardData'
 import {
+  CARD_ORDER,
   SENSORS,
+  deltaFromFirst,
+  formatNumber,
   levelFor,
-  deltaPercent,
-  formatValue,
+  rangeDeltaText,
 } from '@/lib/dashboardData'
 
 const RANGES: TrendRange[] = ['1H', '24H', '7D', '30D']
 
-const CARD_ORDER: SensorId[] = ['mq7', 'dht22', 'humidity', 'acs712']
-
-interface Props {
-  series: SensorSeries[]
-  chartSeries: SensorSeries[]
-  range: TrendRange
-  onRangeChange: (r: TrendRange) => void
-  loading?: boolean
+const RANGE_LABELS: Record<TrendRange, string> = {
+  '1H': 'LIVE',
+  '24H': '24H',
+  '7D': '7D',
+  '30D': '30D',
 }
+
+/** The IoT feed is considered dead when no reading has been received for this long. */
+const LIVE_STALE_MS = 120_000
 
 const ICONS: Record<SensorId, ReactNode> = {
   mq7: (
@@ -28,7 +32,7 @@ const ICONS: Record<SensorId, ReactNode> = {
   ),
   dht22: (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-      <path d="M12 2C12.5523 2 13 2.44772 13 3V12.5C14.1046 12.5 15 13.3954 15 14.5V17C15 19.2091 13.2091 21 11 21C8.79086 21 7 19.2091 7 17V14.5C7 13.3954 7.89543 12.5 9 12.5V3C9 2.44772 9.44772 2 10 2H12Z" />
+      <path d="M12 2C12.5523 2 13 2.44772 13 3V12.5C14.1046 12.5 15 13.3954 15 14.5V17C15 19.2091 13.2091 21 11 21C8.79086 21 7 19.2091 7 17V14.5C7 13.3954 7.89543 12.5 9 12.5V3C9.44772 2 9.44772 2 10 2H12Z" />
       <circle cx="11" cy="17" r="2" />
     </svg>
   ),
@@ -45,72 +49,135 @@ const ICONS: Record<SensorId, ReactNode> = {
 }
 
 interface CardData {
-  key: string
+  id: SensorId
   icon: ReactNode
   title: string
   value: string
-  current: number
   unit: string
   decimals: number
   delta: number
+  deltaLabel: string
+  pulse: boolean
   chartPoints: SeriesPoint[]
   color: string
-  status: ReturnType<typeof levelFor>
+  status: { level: StatusLevel; color: string; label: string }
   statusText: string
   thresholdNominal: number
   thresholdWarning: number
 }
 
-export default function DashboardSensorCards({ series, chartSeries, range, onRangeChange, loading }: Props) {
+/** Range switches invalidate the hovered bucket — drop the selection. */
+function ClearHoverOnRangeChange({ range }: { range: TrendRange }) {
+  const { setHover } = useChartHoverApi()
+  useEffect(() => {
+    setHover(null)
+  }, [range, setHover])
+  return null
+}
+
+interface Props {
+  series: SensorSeries[]
+  chartSeries: SensorSeries[]
+  range: TrendRange
+  onRangeChange: (r: TrendRange) => void
+}
+
+export default function DashboardSensorCards({ series, chartSeries, range, onRangeChange }: Props) {
+  // Re-evaluate feed freshness on a tick so the dot flips to red even when no
+  // new readings arrive (and trigger no re-render otherwise). `now` starts at 0
+  // and is only set client-side after mount, keeping SSR/hydration consistent.
+  const [now, setNow] = useState(0)
+  useEffect(() => {
+    const tick = () => setNow(Date.now())
+    const first = setTimeout(tick, 0)
+    const id = setInterval(tick, 5000)
+    return () => {
+      clearTimeout(first)
+      clearInterval(id)
+    }
+  }, [])
+
+  // Newest backend reading timestamp across all buffers — both the live WS
+  // stream and the 30s backfill stamp points with the device's payload time.
+  let lastReadingT = 0
+  for (const s of series) {
+    for (const p of s.points) {
+      if (typeof p.t === 'number' && p.t > lastReadingT) lastReadingT = p.t
+    }
+  }
+  const liveFeed = now > 0 && lastReadingT > 0 && now - lastReadingT <= LIVE_STALE_MS
+
+  // Every number on the cards is derived from the SAME bucketed series the
+  // trend chart plots: headline = newest dot, delta = first dot → newest dot.
   const cards: CardData[] = CARD_ORDER.map((id) => {
     const cfg = SENSORS[id]
-    const points = series.find((x) => x.id === id)?.points ?? []
-    const last = points[points.length - 1]
-    const current = last?.value ?? cfg.baseline
     const chartPoints = chartSeries.find((x) => x.id === id)?.points ?? []
+    const hasData = chartPoints.length >= 2
+    const last = hasData ? chartPoints[chartPoints.length - 1] : null
+    const current = last?.value ?? 0
 
     return {
-      key: id,
+      id,
       icon: ICONS[id],
       title: cfg.name,
-      value: last ? formatValue(current, cfg.decimals) : '-',
-      current,
+      value: last ? formatNumber(current, cfg.decimals) : '-',
       unit: cfg.unit,
       decimals: cfg.decimals,
-      delta: deltaPercent(points),
+      delta: hasData ? deltaFromFirst(chartPoints) : 0,
+      deltaLabel: rangeDeltaText(range),
+      pulse: range === '1H' && liveFeed,
       chartPoints,
       color: cfg.color,
-      status: levelFor(cfg, current),
-      statusText: `WARNING > ${cfg.thresholdWarning} ${cfg.unit}`,
+      status: last
+        ? levelFor(cfg, current)
+        : { level: 'NOMINAL' as StatusLevel, color: '#64748B', label: 'NO DATA' },
+      statusText: `WARNING > ${formatNumber(cfg.thresholdWarning, 0)} ${cfg.unit}`,
       thresholdNominal: cfg.thresholdNominal,
       thresholdWarning: cfg.thresholdWarning,
     }
   })
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="font-bold text-base text-gray-100 tracking-wide">Activity Reading</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Live telemetry with selectable trend window</p>
+    <ChartHoverProvider>
+      <ClearHoverOnRangeChange range={range} />
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-bold text-base text-gray-100 tracking-wide">Activity Reading</h2>
+            <p className="text-xs text-gray-400 mt-0.5">Readings adapt to the selected trend window</p>
+          </div>
+          <div className="flex items-center gap-1 flex-wrap bg-white/5 border border-white/10 rounded-lg p-1">
+            {RANGES.map((r) => (
+              <button
+                key={r}
+                onClick={() => onRangeChange(r)}
+                className={'btn-segment ' + (range === r ? 'btn-segment-active' : 'text-gray-400 hover:text-gray-200')}
+              >
+                {r === '1H' && (
+                  <span className="relative inline-flex h-2 w-2 align-middle mr-1.5">
+                    {liveFeed && (
+                      <span className="absolute inline-flex h-full w-full rounded-full bg-(--green-indicator) opacity-75 animate-ping" />
+                    )}
+                    <span
+                      className={
+                        'relative inline-flex rounded-full h-2 w-2 ' +
+                        (liveFeed ? 'bg-(--green-indicator)' : 'bg-(--red-indicator)')
+                      }
+                    />
+                  </span>
+                )}
+                {RANGE_LABELS[r]}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex items-center gap-1 flex-wrap bg-white/5 border border-white/10 rounded-lg p-1">
-          {RANGES.map((r) => (
-            <button
-              key={r}
-              onClick={() => onRangeChange(r)}
-              className={'btn-segment ' + (range === r ? 'btn-segment-active' : 'text-gray-400 hover:text-gray-200')}
-            >
-              {r}
-            </button>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-5">
+          {cards.map(({ id, ...d }) => (
+            <DashboardMetricCard key={id} id={id} {...d} />
           ))}
         </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-5">
-        {cards.map(({ key, ...d }) => (
-          <DashboardMetricCard key={key} {...d} />
-        ))}
-      </div>
-    </div>
+      <ChartHoverOverlay chartSeries={chartSeries} range={range} />
+    </ChartHoverProvider>
   )
 }

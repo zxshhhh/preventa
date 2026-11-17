@@ -1,4 +1,5 @@
 ﻿import LoginForm from '@/features/auth/components/LoginForm'
+import SystemStatus from '@/components/ui/SystemStatus'
 import Image from 'next/image'
 
 const features = [
@@ -36,6 +37,9 @@ export default function LoginPage() {
         </div>
         <div className="flex-1 p-5 sm:p-10 flex flex-col justify-center">
           <LoginForm />
+          <div className="mt-4 flex justify-center">
+            <SystemStatus />
+          </div>
         </div>
       </div>
     </main>

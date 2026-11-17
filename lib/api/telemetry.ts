@@ -100,10 +100,16 @@ export async function fetchLatestSeries(): Promise<SensorSeries[]> {
   return normalizeReadings(data.results ?? [], '1H')
 }
 
-export async function fetchRangeSeries(range: TrendRange): Promise<SensorSeries[]> {
+/** Raw (un-bucketed) readings for the requested window — callers that merge live points bucket themselves. */
+export async function fetchRangeRaw(range: TrendRange): Promise<SensorSeries[]> {
   const items = await fetchWindow(range)
   if (!items.length) return []
-  return normalizeReadings(items, range).map((s) => ({
+  return normalizeReadings(items, range)
+}
+
+export async function fetchRangeSeries(range: TrendRange): Promise<SensorSeries[]> {
+  const raw = await fetchRangeRaw(range)
+  return raw.map((s) => ({
     id: s.id,
     points: bucketPoints(s.points, range),
   }))

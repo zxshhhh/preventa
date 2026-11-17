@@ -52,7 +52,7 @@ function ReportCard({ log }: { log: LogEntry }) {
 
   return (
     <div className="border border-white/10 rounded-xl p-3 flex flex-col gap-2 bg-white/5">
-      <p className="text-xs font-mono text-gray-400">
+      <p className="text-xs tnum text-gray-400">
         {hydrated ? (
           <>
             {formatDate(log.timestamp)} · <span className="font-bold text-gray-300">{formatTime(log.timestamp)}</span>
@@ -65,7 +65,7 @@ function ReportCard({ log }: { log: LogEntry }) {
         <TierBadge tier={log.peakTier ?? 1} />
         <FireTypeBadge type={log.peakFireType ?? 'none'} />
         {log.durationSeconds && (
-          <span className="text-xs font-mono text-gray-300 px-2 py-0.5 rounded-full bg-white/5 border border-white/10">
+          <span className="text-xs tnum text-gray-300 px-2 py-0.5 rounded-full bg-white/5 border border-white/10">
             {log.durationSeconds}s
           </span>
         )}

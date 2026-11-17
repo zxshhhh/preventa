@@ -1,13 +1,11 @@
 ﻿'use client'
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import NotificationModal from '@/components/NotificationModal'
 import { useSidebar } from '@/context/useSidebar'
 import { useSensors } from '@/context/useSensors'
 import { useHydrated } from '@/lib/useHydrated'
-import { isApiConfigured } from '@/lib/api/config'
 import { logout } from '@/lib/api/auth'
-import { fetchSystemStatus } from '@/lib/api/system'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
@@ -53,31 +51,6 @@ function isActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(href + '/')
 }
 
-function LiveStatus({ connected, title, variant }: { connected: boolean; title: string; variant: 'rail' | 'inline' }) {
-  const color = connected ? 'bg-emerald-400' : 'bg-red-400'
-  const label = connected ? 'ONLINE' : 'OFFLINE'
-  if (variant === 'inline') {
-    return (
-      <div title={title} className="flex items-center gap-1.5 rounded-full border border-white/15 px-2 py-1 select-none shrink-0">
-        <span className="relative flex h-2 w-2">
-          <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${color} ${connected ? 'animate-ping' : ''}`} />
-          <span className={`relative inline-flex rounded-full h-2 w-2 ${color}`} />
-        </span>
-        <span className={`text-[9px] font-extrabold tracking-widest ${connected ? 'text-emerald-400' : 'text-red-400'}`}>{label}</span>
-      </div>
-    )
-  }
-  return (
-    <div title={title} className="flex flex-col items-center gap-1 select-none">
-      <span className="relative flex h-2.5 w-2.5">
-        <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${color} ${connected ? 'animate-ping' : ''}`} />
-        <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${color}`} />
-      </span>
-      <span className={`text-[8px] font-extrabold tracking-widest ${connected ? 'text-emerald-400' : 'text-red-400'}`}>{label}</span>
-    </div>
-  )
-}
-
 export default function Sidebar() {
   const { isMobileOpen, toggle, close } = useSidebar()
   const { unreadCount } = useSensors()
@@ -85,29 +58,6 @@ export default function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const [showNotifications, setShowNotifications] = useState(false)
-  const [liveOnline, setLiveOnline] = useState<boolean | null>(null)
-
-  useEffect(() => {
-    if (!hydrated || !isApiConfigured()) return
-    let cancelled = false
-    const poll = async () => {
-      try {
-        const online = await fetchSystemStatus()
-        if (!cancelled) setLiveOnline(online)
-      } catch {
-        /* keep the last known connection status */
-      }
-    }
-    void poll()
-    const id = setInterval(poll, 10_000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [hydrated])
-
-  const connected = liveOnline ?? true
-  const statusTitle = connected ? 'System connected to device' : 'System connection lost'
 
   const handleLogout = () => {
     logout()
@@ -141,7 +91,6 @@ export default function Sidebar() {
           </div>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <LiveStatus variant="inline" connected={connected} title={statusTitle} />
           <button onClick={() => setShowNotifications(true)} title="Notifications" className="btn-icon w-10 h-10 border border-white/15 relative">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M18 8C18 6.4087 17.3679 4.88258 16.2426 3.75736C15.1174 2.63214 13.5913 2 12 2C10.4087 2 8.88258 2.63214 7.75736 3.75736C6.63214 4.88258 6 6.4087 6 8C6 15 3 17 3 17H21C21 17 18 15 18 8Z" />
@@ -225,7 +174,6 @@ export default function Sidebar() {
           })}
         </nav>
         <div className="p-3 flex flex-col gap-2 border-t border-white/10 shrink-0">
-          <LiveStatus variant="rail" connected={connected} title={statusTitle} />
           <button
             onClick={() => setShowNotifications(true)}
             title="Notifications"

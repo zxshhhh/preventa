@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { SensorSeries, TrendRange } from '@/lib/dashboardData'
 import { bucketPoints } from '@/lib/dashboardData'
 import { isApiConfigured } from '@/lib/api/config'
-import { fetchRangeSeries } from '@/lib/api/telemetry'
+import { fetchRangeRaw } from '@/lib/api/telemetry'
 import { useSensors } from '@/context/useSensors'
 import DashboardHeader from '@/components/DashboardHeader'
 import RecentReportLog from '@/components/RecentReportLog'
@@ -16,8 +16,10 @@ export default function DashboardContent() {
   const { series } = useSensors()
   const [range, setRange] = useState<TrendRange>('1H')
   const [remote, setRemote] = useState<{ range: TrendRange; series: SensorSeries[] } | null>(null)
-  const [loading, setLoading] = useState(false)
 
+  // LIVE is the WebSocket buffer itself: every streamed reading (~2s cadence)
+  // renders the moment it arrives. The provider keeps it filled — a one-time
+  // hour seed on mount plus the live stream — so no time-based fetch here.
   const liveChart = useMemo(
     () => series.map((s) => ({ id: s.id, points: bucketPoints(s.points, '1H')})),
     [series]
@@ -30,32 +32,19 @@ export default function DashboardContent() {
     let timer: ReturnType<typeof setTimeout> | null = null
 
     const load = async () => {
-    if (cancelled) return
+      if (cancelled) return
 
-    console.log(`[Trend] Fetching range: ${range}`)
-    setLoading(true)
-
-    try {
-      const data = await fetchRangeSeries(range)
-
-      console.log(`[Trend] API response for ${range}:`, data)
-
-      if (!cancelled) {
-        setRemote({ range, series: data })
-      }
-    } catch (err) {
-      console.error(`[Trend] Failed to fetch ${range}:`, err)
-
-      if (!cancelled) {
-        setRemote({ range, series: [] })
-      }
-    } finally {
-      if (!cancelled) {
-        setLoading(false)
-        timer = setTimeout(load, RANGE_REFRESH_MS)
+      try {
+        const data = await fetchRangeRaw(range)
+        if (!cancelled) setRemote({ range, series: data })
+      } catch {
+        if (!cancelled) setRemote({ range, series: [] })
+      } finally {
+        if (!cancelled) {
+          timer = setTimeout(load, RANGE_REFRESH_MS)
+        }
       }
     }
-  }
 
     void load()
     return () => {
@@ -64,7 +53,24 @@ export default function DashboardContent() {
     }
   }, [range])
 
-  const chartSeries = range === '1H' ? liveChart : remote?.range == range ? remote.series : []
+  const chartSeries = useMemo(() => {
+    if (range === '1H') return liveChart
+
+    // Historical ranges chart the fetched backend window; live WS readings
+    // newer than the last fetched point are merged in so the tail ticks in
+    // real time between the 60s refreshes. Merge on raw points, bucket once.
+    const base = remote?.range === range ? remote.series : null
+    if (!base || !base.length) return []
+    return base.map((s) => {
+      const lastT = s.points.length ? s.points[s.points.length - 1].t ?? 0 : 0
+      const live = series.find((l) => l.id === s.id)?.points ?? []
+      const fresh = live.filter((p) => typeof p.t === 'number' && p.t > lastT)
+      return {
+        id: s.id,
+        points: bucketPoints(fresh.length ? [...s.points, ...fresh] : s.points, range),
+      }
+    })
+  }, [remote, range, series, liveChart])
 
   return (
     <div className="flex flex-col gap-6">
@@ -75,7 +81,6 @@ export default function DashboardContent() {
         chartSeries={chartSeries}
         range={range}
         onRangeChange={setRange}
-        loading={loading}
       />
     </div>
   )

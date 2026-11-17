@@ -1,9 +1,14 @@
 import { apiPost, apiDelete, ApiError } from './client'
 import { ENDPOINTS } from './endpoints'
 
-// Firebase Web push (Phase 8). Config arrives from the backend teammate via env:
+// Firebase Web push (Phase 7). Config arrives from the backend teammate via env:
 // NEXT_PUBLIC_FIREBASE_API_KEY / AUTH_DOMAIN / PROJECT_ID / MESSAGING_SENDER_ID / APP_ID + NEXT_PUBLIC_FIREBASE_VAPID_KEY.
-// firebase/* is only loaded dynamically inside functions, so the bundle stays clean when push is unconfigured.
+// Architecture: the PWA service worker (public/sw.js) doubles as the FCM messaging
+// worker — PwaRegister registers it as a module SW with the config as query params,
+// and getToken targets that same registration. firebase/* is only loaded dynamically
+// inside functions, so the bundle stays clean when push is unconfigured.
+// Backend contract: FCM data messages carry type === 'preventa_fire_event' with
+// event_id / title / body; the background SW shows a notification that opens /activity.
 
 const PUSH_TOKEN_KEY = 'preventa.pushToken'
 
@@ -73,28 +78,22 @@ async function loadFirebaseMessaging() {
   }
 }
 
-/** The messaging service worker receives its config via query params (public/firebase-messaging-sw.js). */
-function buildMessagingSwUrl(config: FirebaseWebConfig): string {
-  const params = new URLSearchParams({
-    apiKey: config.apiKey,
-    authDomain: config.authDomain,
-    projectId: config.projectId,
-    messagingSenderId: config.messagingSenderId,
-    appId: config.appId,
-  })
-  return `/firebase-messaging-sw.js?${params.toString()}`
-}
-
 export type PushEnableResult =
   | { ok: true; token: string }
   | { ok: false; reason: 'unsupported' | 'denied' | 'conflict' | 'error'; message: string }
 
 /**
- * Enable browser notifications: permission → messaging service worker → FCM token →
- * POST /notifications/push-subscription/ with {token} (201 and 204 are both successful).
+ * Enable browser notifications: permission → the PWA service worker (already the
+ * Firebase messaging worker) → FCM token → POST /notifications/push-subscription/
+ * with {token} (201 and 204 are both successful).
  */
 export async function enableBrowserPush(): Promise<PushEnableResult> {
-  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
+  if (
+    typeof window === 'undefined' ||
+    !('serviceWorker' in navigator) ||
+    !window.isSecureContext ||
+    !('Notification' in window)
+  ) {
     return { ok: false, reason: 'unsupported', message: 'Push is unavailable on this browser.' }
   }
   const config = getFirebaseConfig()
@@ -125,8 +124,9 @@ export async function enableBrowserPush(): Promise<PushEnableResult> {
   }
 
   try {
-    const registration = await navigator.serviceWorker.register(buildMessagingSwUrl(config), { scope: '/' })
-    await navigator.serviceWorker.ready
+    // The PWA service worker doubles as the Firebase messaging worker (PwaRegister
+    // registered it with config params on every page); reuse it instead of a second SW.
+    const registration = (await navigator.serviceWorker.getRegistration('/')) ?? (await navigator.serviceWorker.ready)
 
     const fb = await loadFirebaseMessaging()
     const supported = await fb.isSupported().catch(() => false)
@@ -142,7 +142,7 @@ export async function enableBrowserPush(): Promise<PushEnableResult> {
     }
 
     try {
-      await apiPost(ENDPOINTS.notifications.replace('/notifications/', '/notifications/push-subscription/'), { token })
+      await apiPost(ENDPOINTS.pushSubscription, { token })
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         return {
@@ -174,7 +174,7 @@ export async function disableBrowserPush(accessTokenOverride?: string | null): P
     try {
       // The override keeps the DELETE authenticated when called just before logout clears the JWT.
       await apiDelete(
-        `${ENDPOINTS.notifications}/push-subscription/`,
+        ENDPOINTS.pushSubscription,
         { token },
         accessTokenOverride ? { headers: { Authorization: `Bearer ${accessTokenOverride}` } } : {},
       )
@@ -224,6 +224,9 @@ export async function onForegroundPush(handler: (alert: PushAlert) => void): Pro
     const messaging = fb.getMessaging(app)
     return fb.onMessage(messaging, (payload) => {
       const data = (payload.data ?? {}) as Record<string, string>
+      // Backend contract: fire-event pushes carry type === 'preventa_fire_event';
+      // ignore anything else (missing type is tolerated defensively).
+      if (data.type && data.type !== 'preventa_fire_event') return
       const tier = Number(data.peak_tier ?? data.tier ?? 0)
       handler({
         eventId: data.event_id ?? null,

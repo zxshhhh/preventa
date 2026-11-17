@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { lockScroll } from '@/lib/scrollLock'
 import { useSensors, type SensorEvent } from '@/context/useSensors'
-import { SENSORS, levelFor, formatValue, type SensorId, type StatusLevel } from '@/lib/dashboardData'
+import { SENSORS, levelFor, formatNumber, type SensorId, type StatusLevel } from '@/lib/dashboardData'
 import { fetchNotifications, type DeliveryActivity } from '@/lib/api/notifications'
 import { isApiConfigured } from '@/lib/api/config'
 
@@ -50,7 +50,7 @@ function EventRow({ event }: { event: SensorEvent }) {
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-gray-100">{event.title}</p>
         <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">{event.message}</p>
-        <p className="text-xs text-gray-500 mt-1 font-mono">{formatTime(event.timestamp)}</p>
+        <p className="text-xs text-gray-500 mt-1 tnum">{formatTime(event.timestamp)}</p>
       </div>
       {event.level === 'CRITICAL' && (
         <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full text-(--red-indicator) bg-(--red-indicator)/15 whitespace-nowrap">
@@ -84,7 +84,7 @@ function ActivityRow({ activity }: { activity: DeliveryActivity }) {
         <p className="text-xs font-semibold text-gray-100">
           {CHANNEL_LABEL[activity.channel]} · event {activity.eventId ?? '—'}
         </p>
-        <p className="text-[11px] text-gray-500 mt-0.5 font-mono">
+        <p className="text-[11px] text-gray-500 mt-0.5 tnum">
           {sent ? `sent ${sent}` : 'not sent yet'}
           {delivered ? ` · delivered ${delivered}` : ''}
           {activity.contactId != null ? ` · contact ${activity.contactId}` : ''}
@@ -178,7 +178,7 @@ export default function NotificationModal({ show, onClose }: Props) {
         id,
         level: status.level,
         title: cfg.name,
-        detail: `${formatValue(point.value, cfg.decimals)} ${cfg.unit} — ${status.label}`,
+        detail: `${formatNumber(point.value, cfg.decimals)} ${cfg.unit} — ${status.label}`,
       },
     ]
   })
@@ -197,7 +197,7 @@ export default function NotificationModal({ show, onClose }: Props) {
                     <span className="relative inline-flex rounded-full h-2 w-2" style={{ backgroundColor: LEVEL_DOT[a.level] }} />
                   </span>
                   <span className="font-bold text-gray-100">{a.title}</span>
-                  <span className="text-gray-400 font-mono">{a.detail}</span>
+                  <span className="text-gray-400 tnum">{a.detail}</span>
                 </div>
               ))}
             </div>

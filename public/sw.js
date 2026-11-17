@@ -1,4 +1,12 @@
-const CACHE = 'preventa-v1'
+/* PREVENTA PWA service worker — the single service worker for the scope.
+   Doubles as the Firebase Web Push messaging worker: the page registers it as a
+   module SW with the Firebase Web config injected as query params (see
+   components/PwaRegister.tsx), so background FCM messages are handled here
+   without a second service worker. */
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.3.0/firebase-app.js'
+import { getMessaging, onBackgroundMessage } from 'https://www.gstatic.com/firebasejs/13.3.0/firebase-messaging-sw.js'
+
+const CACHE = 'preventa-v2'
 const PRECACHE = ['/login', '/activity', '/']
 
 self.addEventListener('install', (event) => {
@@ -54,3 +62,38 @@ self.addEventListener('fetch', (event) => {
     }),
   )
 })
+
+/* Firebase Web Push (Phase 7) — wired only when the page registered this SW with
+   config params; without them the SW stays a pure offline shell. Background
+   fire-event alerts show a notification that opens the activity dashboard. */
+const params = new URLSearchParams(self.location.search)
+const firebaseConfig = ['apiKey', 'authDomain', 'projectId', 'messagingSenderId', 'appId'].reduce(
+  (cfg, key) => {
+    const value = params.get(key)
+    if (value) cfg[key] = value
+    return cfg
+  },
+  {},
+)
+
+if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagingSenderId && firebaseConfig.appId) {
+  const firebaseApp = initializeApp(firebaseConfig)
+  const EVENT_PATH = new URL('/activity', self.location.origin)
+
+  self.addEventListener('notificationclick', (event) => {
+    if (event.notification.data?.type !== 'preventa_fire_event') return
+    event.stopImmediatePropagation()
+    event.notification.close()
+    event.waitUntil(self.clients.openWindow(EVENT_PATH.href))
+  })
+
+  onBackgroundMessage(getMessaging(firebaseApp), (message) => {
+    const alert = message.data
+    if (alert?.type !== 'preventa_fire_event') return
+    return self.registration.showNotification(alert.title || 'PREVENTA alert', {
+      body: alert.body || 'A new fire incident was reported.',
+      tag: `preventa-event-${alert.event_id ?? 'unknown'}`,
+      data: { type: alert.type },
+    })
+  })
+}

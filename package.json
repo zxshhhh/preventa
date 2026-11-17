@@ -44,7 +44,9 @@
     "react-server-dom-webpack": true,
     "@vinext/cloudflare": true,
     "esbuild@0.28.1": true,
-    "workerd@1.20260916.1": true
+    "workerd@1.20260916.1": true,
+    "@firebase/util@1.15.3": true,
+    "protobufjs@7.6.6": true
   },
   "type": "module"
 }
