@@ -69,10 +69,10 @@ export default function SystemStatus() {
         : 'text-gray-400'
   const title =
     status === 'online'
-      ? 'PREVENTA backend is reachable'
+      ? 'PREVENTA system is up'
       : status === 'offline'
-        ? 'PREVENTA backend is unreachable'
-        : 'Checking backend connection…'
+        ? 'PREVENTA system is down'
+        : 'Checking system status…'
 
   return (
     <div title={title} className="flex items-center gap-1.5 select-none">

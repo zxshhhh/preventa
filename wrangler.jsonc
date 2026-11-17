@@ -18,5 +18,5 @@
   "cache": {"enabled":false},
   "vars": {
     "NEXT_PUBLIC_API_URL": "https://preventa.duckdns.org"
-  },
+  }
 }
