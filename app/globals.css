@@ -227,7 +227,7 @@ input[type="checkbox"]:checked::before {
 }
 
 @utility btn-segment {
-    @apply px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-all hover:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/40;
+    @apply px-3 py-1.5 rounded-lg text-xs cursor-pointer transition-all hover:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/40;
 }
 
 @utility btn-segment-active {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, type ReactNode } from 'react'
 import type { SensorId, SeriesPoint, StatusLevel } from '@/lib/dashboardData'
 import {
   CHART_VIEW,
+  CHART_RANGES,
   buildTicks,
   chartGeom,
   formatNumber,
@@ -69,7 +70,8 @@ export default function DashboardMetricCard({
 
   // Skeleton state: no plottable series yet (initial fetch, empty feed).
   const hasData = chartPoints.length >= 2
-  const geom = hasData ? chartGeom(chartPoints) : null
+
+  const geom = hasData ? chartGeom(chartPoints, CHART_RANGES[id]) : null
 
   const fillPct = Math.min(100, ((hasData ? chartPoints[chartPoints.length - 1].value : 0) / thresholdWarning) * 100)
 
@@ -219,7 +221,7 @@ export default function DashboardMetricCard({
                 <span className="text-xs font-semibold text-gray-400">{deltaLabel}</span>
               </>
             ) : (
-              <span className="text-xs font-semibold text-gray-500">Awaiting readings</span>
+              <span className="text-xs font-semibold text-gray-500">Loading readings</span>
             )}
           </div>
         </div>

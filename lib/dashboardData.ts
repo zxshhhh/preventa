@@ -91,6 +91,13 @@ export const HUMIDITY_CONFIG: SensorConfig = SENSORS.humidity
 /** Metric card render order (gas, temperature, humidity, power). */
 export const CARD_ORDER: SensorId[] = ['mq7', 'dht22', 'humidity', 'acs712']
 
+export const CHART_RANGES: Record<SensorId, { min: number; max: number }> = {
+  mq7: { min: 0, max: 100 },       // Gas Concentration (PPM)
+  dht22: { min: 15, max: 65 },    // Temperature (°C)
+  humidity: { min: 40, max: 100 }, // Humidity (%)
+  acs712: { min: -4, max: 8 },     // Power Usage (AMPS)
+}
+
 export interface ReportReading {
   label: string
   value: number
@@ -272,8 +279,13 @@ export interface ChartGeom {
  * Scale mapper for the metric-card trend chart. Shared by the card itself and
  * the fullscreen hover overlay so dot positions always agree, pixel for pixel.
  */
-export function chartGeom(points: SeriesPoint[]): ChartGeom | null {
+
+export function chartGeom(
+  points: SeriesPoint[],
+  fixedRange?: { min: number; max: number },
+): ChartGeom | null {
   if (!points.length) return null
+
   const { W, H, M } = CHART_VIEW
   const innerW = W - M.left - M.right
   const innerH = H - M.top - M.bottom
@@ -281,14 +293,28 @@ export function chartGeom(points: SeriesPoint[]): ChartGeom | null {
   const values = points.map((p) => p.value)
   const dataMin = Math.min(...values)
   const dataMax = Math.max(...values)
-  const pad = (dataMax - dataMin) * 0.14 || Math.max(dataMax * 0.05, 1)
-  const ymin = dataMin - pad
-  const ymax = dataMax + pad
 
-  const xAt = (i: number) => M.left + (points.length > 1 ? (i / (points.length - 1)) * innerW : M.left)
-  const yAt = (v: number) => M.top + innerH - ((v - ymin) / (ymax - ymin)) * innerH
+  const pad =
+    (dataMax - dataMin) * 0.14 ||
+    Math.max(dataMax * 0.05, 1)
+
+  const ymin = fixedRange?.min ?? dataMin - pad
+  const ymax = fixedRange?.max ?? dataMax + pad
+
+  const xAt = (i: number) =>
+    M.left +
+    (points.length > 1
+      ? (i / (points.length - 1)) * innerW
+      : 0)
+
+  const yAt = (v: number) =>
+    M.top +
+    innerH -
+    ((v - ymin) / (ymax - ymin)) * innerH
+
   return { xAt, yAt, ymin, ymax }
 }
+
 
 /**
  * Index in `points` matching a hovered dot from another card: nearest
