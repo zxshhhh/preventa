@@ -1,6 +1,5 @@
 'use client'
 
-import Image from 'next/image'
 import { useEffect, useState } from 'react'
 import { lockScroll } from '@/lib/scrollLock'
 import type { LogEntry } from '@/lib/logReport'
@@ -30,7 +29,13 @@ function TierBadge({ tier, label }: { tier: number; label: string }) {
   )
 }
 
-function EsplCamSnapshot({ log }: { log: LogEntry }) {
+function EsplCamSnapshot({
+  log,
+  captureDeviceId,
+}: {
+  log: LogEntry
+  captureDeviceId?: string
+}) {
   const [capture, setCapture] = useState<string | null>(null)
   const [state, setState] = useState<'loading' | 'ready' | 'missing'>('loading')
 
@@ -39,13 +44,13 @@ function EsplCamSnapshot({ log }: { log: LogEntry }) {
     let cancelled = false
 
     const load = async () => {
-      if (!log.deviceId) {
+      if (!captureDeviceId) {
         setState('missing')
         return
       }
       setState('loading')
       try {
-        const captures = await fetchCaptures(String(log.deviceId))
+        const captures = await fetchCaptures(captureDeviceId)
         if (cancelled) return
         const nearest = findNearestCapture(captures, log.timestamp)
         if (!nearest) {
@@ -71,7 +76,7 @@ function EsplCamSnapshot({ log }: { log: LogEntry }) {
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [log])
+  }, [log, captureDeviceId])
 
   if (state === 'loading') {
     return (
@@ -101,10 +106,9 @@ function EsplCamSnapshot({ log }: { log: LogEntry }) {
 
   return (
     <div className="relative aspect-video bg-neutral-900 rounded-lg overflow-hidden">
-      <Image
+      <img
         src={capture as string}
         alt="ESP32-CAM capture"
-        unoptimized
         className="w-full h-full object-cover"
       />
       <span className="absolute top-2 left-2 flex items-center gap-1.5">
@@ -117,7 +121,15 @@ function EsplCamSnapshot({ log }: { log: LogEntry }) {
   )
 }
 
-export default function LogDetailModal({ log, onClose }: Props) {
+export default function LogDetailModal({
+  log,
+  onClose,
+  captureDeviceId,
+}: {
+  log: LogEntry
+  onClose: () => void
+  captureDeviceId?: string
+}) {
   useEffect(() => lockScroll(), [])
 
   const tierLabel = log.peakTier
@@ -153,7 +165,10 @@ export default function LogDetailModal({ log, onClose }: Props) {
           </div>
           <div>
             <h3 className="text-[10px] font-extrabold text-gray-400 tracking-wide mb-2">ESPCAM32 SNAPSHOT</h3>
-            <EsplCamSnapshot log={log} />
+            <EsplCamSnapshot
+              log={log}
+              captureDeviceId={captureDeviceId}
+            />
           </div>
         </div>
         <div className="h-4 w-full flex bg-ember"></div>

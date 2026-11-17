@@ -46,6 +46,10 @@ export default function LogConsole() {
   const displayLogs = filtered ? filteredLogs : baseLogs
 
   const months = useMemo(() => groupByMonth(displayLogs, yearKeys), [displayLogs, yearKeys])
+  
+  const captureDeviceId = selectedLog
+    ? devices.find((device) => device.id === selectedLog.deviceId)?.hardwareId
+    : undefined
 
   // Unfiltered fetch: builds the month skeleton so all 12 month cards stay visible
   // no matter what the DEVICE/STATUS chips select.
@@ -275,6 +279,7 @@ export default function LogConsole() {
         <LogDetailModal
           log={selectedLog}
           onClose={() => setSelectedLog(null)}
+          captureDeviceId={captureDeviceId}
         />
       )}
     </main>
