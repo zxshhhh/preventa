@@ -1,12 +1,19 @@
 ﻿'use client'
 
-import { useId, useRef, useState, type ReactNode } from 'react'
-import type { SeriesPoint, StatusLevel } from '@/lib/dashboardData'
-import { formatValue, smoothPath, buildTicks } from '@/lib/dashboardData'
+import { useCallback, useEffect, useId, useRef, type ReactNode } from 'react'
+import type { SensorId, SeriesPoint, StatusLevel } from '@/lib/dashboardData'
+import {
+  CHART_VIEW,
+  buildTicks,
+  chartGeom,
+  formatNumber,
+  smoothPath,
+} from '@/lib/dashboardData'
+import { useChartHoverApi } from './ChartHoverProvider'
 
-const W = 320
-const H = 130
-const M = { top: 12, right: 8, bottom: 14, left: 34 }
+const { W, H, M } = CHART_VIEW
+const INNER_W = W - M.left - M.right
+const INNER_H = H - M.top - M.bottom
 
 interface MetricStatus {
   level: StatusLevel
@@ -15,12 +22,14 @@ interface MetricStatus {
 }
 
 interface Props {
+  id: SensorId
   title: string
   value: string
-  current: number
   unit: string
   decimals: number
   delta: number
+  deltaLabel: string
+  pulse: boolean
   chartPoints: SeriesPoint[]
   color: string
   status: MetricStatus
@@ -30,13 +39,22 @@ interface Props {
   icon?: ReactNode
 }
 
+/** Status pill styling keyed by label; signal colors match the design tokens. */
+const STATUS_CLASS: Record<string, string> = {
+  NOMINAL: 'text-emerald-400 bg-emerald-400/10',
+  WARNING: 'text-amber-400 bg-amber-400/10',
+  CRITICAL: 'text-red-400 bg-red-400/10',
+}
+
 export default function DashboardMetricCard({
+  id,
   title,
   value,
-  current,
   unit,
   decimals,
   delta,
+  deltaLabel,
+  pulse,
   chartPoints,
   color,
   status,
@@ -47,53 +65,116 @@ export default function DashboardMetricCard({
 }: Props) {
   const gid = useId().replace(/:/g, '')
   const svgRef = useRef<SVGSVGElement>(null)
-  const [hover, setHover] = useState<number | null>(null)
+  const { setHover, scheduleClear, register } = useChartHoverApi()
 
-  const fillPct = Math.min(100, (current / thresholdWarning) * 100)
+  // Skeleton state: no plottable series yet (initial fetch, empty feed).
+  const hasData = chartPoints.length >= 2
+  const geom = hasData ? chartGeom(chartPoints) : null
+
+  const fillPct = Math.min(100, ((hasData ? chartPoints[chartPoints.length - 1].value : 0) / thresholdWarning) * 100)
 
   const isUp = delta >= 0
-  const deltaColor = isUp ? '#FB7185' : '#34D399'
+  const last = hasData ? chartPoints[chartPoints.length - 1] : null
 
-  const innerW = W - M.left - M.right
-  const innerH = H - M.top - M.bottom
-
-  const values = chartPoints.map((p) => p.value)
-  const dataMin = values.length ? Math.min(...values) : 0
-  const dataMax = values.length ? Math.max(...values) : 1
-  const pad = (dataMax - dataMin) * 0.14 || Math.max(dataMax * 0.05, 1)
-  const ymin = dataMin - pad
-  const ymax = dataMax + pad
-
-  const xAt = (i: number) => M.left + (chartPoints.length > 1 ? (i / (chartPoints.length - 1)) * innerW : M.left)
-  const yAt = (v: number) => M.top + innerH - ((v - ymin) / (ymax - ymin)) * innerH
-
-  const xy = chartPoints.map((p, i) => ({ x: xAt(i), y: yAt(p.value) }))
-  const lineD = smoothPath(xy)
-  const areaD = chartPoints.length > 1 ? lineD + ` L ${xAt(chartPoints.length - 1)} ${M.top + innerH} L ${xAt(0)} ${M.top + innerH} Z` : ''
-
-  const last = chartPoints.length ? chartPoints[chartPoints.length - 1] : null
-  const hi = hover !== null && chartPoints.length ? Math.max(0, Math.min(hover, chartPoints.length - 1)) : null
-
-  const gridTicks = chartPoints.length > 1 ? buildTicks(ymin, ymax, 4) : []
-  const xAxisY = M.top + innerH
-  const labelIdx =
-    chartPoints.length > 2 ? [0, Math.floor((chartPoints.length - 1) / 2), chartPoints.length - 1] : []
+  const gridTicks = geom ? buildTicks(geom.ymin, geom.ymax, 4) : []
+  const xAxisY = M.top + INNER_H
+  const labelIdx = chartPoints.length > 2 ? [0, Math.floor((chartPoints.length - 1) / 2), chartPoints.length - 1] : []
   const labelAnchor = (i: number) => (i === 0 ? 'start' : i === chartPoints.length - 1 ? 'end' : 'middle')
 
-  const fmt = (v: number) => formatValue(v, decimals)
+  const fmt = (v: number) => formatNumber(v, decimals)
+
+  // --- Hover plumbing -------------------------------------------------------
+  // The card only *emits* the hovered bucket; the fullscreen overlay
+  // (ChartHoverOverlay) renders the crosshair, synced dots and detail panel.
+  const lastIndexRef = useRef<number | null>(null)
+
+  const applyHover = useCallback(
+    (index: number | null) => {
+      if (index === null) {
+        lastIndexRef.current = null
+        setHover(null)
+        return
+      }
+      lastIndexRef.current = index
+      setHover({ cardId: id, index })
+    },
+    [id, setHover],
+  )
+
+  const indexFromClientX = useCallback(
+    (clientX: number): number | null => {
+      const svg = svgRef.current
+      if (!svg || !hasData) return null
+      const rect = svg.getBoundingClientRect()
+      if (!rect.width) return null
+      const userX = ((clientX - rect.left) / rect.width) * W
+      const idx = Math.round(((userX - M.left) / INNER_W) * (chartPoints.length - 1))
+      return Math.max(0, Math.min(idx, chartPoints.length - 1))
+    },
+    [hasData, chartPoints.length],
+  )
 
   const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    const svg = svgRef.current
-    if (!svg || chartPoints.length < 2) return
-    const p = svg.createSVGPoint()
-    p.x = e.clientX
-    p.y = e.clientY
-    const ctm = svg.getScreenCTM()
-    if (!ctm) return
-    const loc = p.matrixTransform(ctm.inverse())
-    const idx = Math.round(((loc.x - M.left) / innerW) * (chartPoints.length - 1))
-    setHover(Math.max(0, Math.min(idx, chartPoints.length - 1)))
+    const idx = indexFromClientX(e.clientX)
+    if (idx !== null) applyHover(idx)
   }
+
+  const onLeave = () => {
+    if (lastIndexRef.current !== null) applyHover(null)
+  }
+
+  // Touch scrubbing (PWA): drag across the chart moves the selection; lifting
+  // the finger keeps the detail readable for a moment before auto-clearing.
+  const onTouch = (e: React.TouchEvent<SVGSVGElement>) => {
+    const t = e.touches[0]
+    if (!t) return
+    const idx = indexFromClientX(t.clientX)
+    if (idx !== null) applyHover(idx)
+  }
+  const onTouchEnd = () => scheduleClear(2500)
+
+  const onFocus = () => {
+    if (hasData && lastIndexRef.current === null) applyHover(chartPoints.length - 1)
+  }
+  const onBlur = () => {
+    if (lastIndexRef.current !== null) applyHover(null)
+  }
+
+  const onKeyDown = (e: React.KeyboardEvent<SVGSVGElement>) => {
+    if (!hasData) return
+    const len = chartPoints.length
+    const base = lastIndexRef.current ?? len - 1
+    let next: number | null = null
+    if (e.key === 'ArrowLeft') next = Math.max(0, base - 1)
+    else if (e.key === 'ArrowRight') next = Math.min(len - 1, base + 1)
+    else if (e.key === 'Home') next = 0
+    else if (e.key === 'End') next = len - 1
+    else if (e.key === 'Escape') next = null
+    else return
+    e.preventDefault()
+    applyHover(next)
+  }
+
+  // Register this card's chart rect so the overlay can pin the crosshair to
+  // the exact dot position (re-read live on every render, scroll-safe).
+  const getRect = useCallback(() => svgRef.current?.getBoundingClientRect() ?? null, [])
+  useEffect(() => register(id, getRect), [register, id, getRect])
+
+  const lineD = geom
+    ? smoothPath(chartPoints.map((p, i) => ({ x: geom.xAt(i), y: geom.yAt(p.value) })))
+    : ''
+  const areaD =
+    geom && hasData
+      ? lineD +
+        ` L ${geom.xAt(chartPoints.length - 1)} ${xAxisY} L ${geom.xAt(0)} ${xAxisY} Z`
+      : ''
+
+  const statusClass = STATUS_CLASS[status.label] ?? 'text-gray-400 bg-white/5'
+  const deltaClass = isUp ? 'text-rose-400 bg-rose-400/10' : 'text-emerald-400 bg-emerald-400/10'
+
+  // Newest-dot marker (screen coords via the shared geometry).
+  const lastX = geom && last ? geom.xAt(chartPoints.length - 1) : 0
+  const lastY = geom && last ? geom.yAt(last.value) : 0
 
   return (
     <div className="panel-card p-5 flex flex-col gap-4">
@@ -109,129 +190,151 @@ export default function DashboardMetricCard({
             <h2 className="font-bold text-sm text-gray-100 truncate">{title}</h2>
           </div>
         </div>
-        <span
-          className="text-[10px] font-extrabold px-2 py-0.5 rounded-full whitespace-nowrap"
-          style={{ backgroundColor: status.color + '26', color: status.level === 'NOMINAL' ? '#34D399' : status.color }}
-        >
+        <span className={`text-xs font-extrabold px-2.5 py-1 rounded-full whitespace-nowrap ${statusClass}`}>
           {status.label}
         </span>
       </div>
       <div className="flex items-end justify-between gap-2">
         <div>
           <div className="flex items-baseline gap-1.5">
-            <span className="text-3xl font-extrabold text-gray-100 tracking-tight">{value}</span>
+            <span className="tnum text-4xl font-extrabold text-gray-100 tracking-tight leading-none">{value}</span>
             <span className="text-sm font-bold text-gray-400">{unit}</span>
           </div>
-          <div className="flex items-center gap-1.5 mt-1.5">
-            <span
-              className="flex items-center gap-0.5 text-[11px] font-extrabold px-2 py-0.5 rounded-full"
-              style={{ color: deltaColor, backgroundColor: deltaColor + '1A' }}
-            >
-              {isUp ? (
-                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="18 15 12 9 6 15" />
-                </svg>
-              ) : (
-                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
-              )}
-              {isUp ? '+' : ''}
-              {delta.toFixed(1)}%
-            </span>
-            <span className="text-[11px] font-semibold text-gray-400">vs recent avg</span>
+          <div className="flex items-center gap-1.5 mt-2">
+            {hasData ? (
+              <>
+                <span className={`tnum flex items-center gap-0.5 text-xs font-extrabold px-2 py-0.5 rounded-full ${deltaClass}`}>
+                  {isUp ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="18 15 12 9 6 15" />
+                    </svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                  )}
+                  {isUp ? '+' : ''}
+                  {delta.toFixed(1)}%
+                </span>
+                <span className="text-xs font-semibold text-gray-400">{deltaLabel}</span>
+              </>
+            ) : (
+              <span className="text-xs font-semibold text-gray-500">Awaiting readings</span>
+            )}
           </div>
         </div>
       </div>
       <div className="relative">
-        <svg
-          ref={svgRef}
-          viewBox={`0 0 ${W} ${H}`}
-          className="w-full h-auto block select-none"
-          onMouseMove={onMove}
-          onMouseLeave={() => setHover(null)}
-        >
-          <defs>
-            <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={color} stopOpacity="0.28" />
-              <stop offset="100%" stopColor={color} stopOpacity="0" />
-            </linearGradient>
-          </defs>
-          {gridTicks.map((t) => (
+        {!hasData ? (
+          // Ghost chart: fixed placeholder wave in the same viewBox and margins
+          // as the real chart so the swap-in causes no layout jump.
+          <div className="skeleton-shine rounded-lg" aria-hidden="true">
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto block select-none">
+              <path
+                d={`M ${M.left} 66 C 78 34, 110 88, 150 64 C 186 44, 214 92, 250 66 C 272 52, 292 62, ${W - M.right} 50 L ${W - M.right} ${xAxisY} L ${M.left} ${xAxisY} Z`}
+                fill="rgba(148,163,184,0.10)"
+              />
+              <path
+                d={`M ${M.left} 66 C 78 34, 110 88, 150 64 C 186 44, 214 92, 250 66 C 272 52, 292 62, ${W - M.right} 50`}
+                fill="none"
+                stroke="rgba(148,163,184,0.35)"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <line x1={M.left} x2={W - M.right} y1={xAxisY} y2={xAxisY} stroke="rgba(148,163,184,0.25)" strokeWidth="1" />
+              {[0, 0.5, 1].map((f) => (
+                <rect
+                  key={f}
+                  x={M.left + f * (INNER_W - 44)}
+                  y={xAxisY + 5}
+                  width="44"
+                  height="7"
+                  rx="3.5"
+                  fill="rgba(148,163,184,0.18)"
+                />
+              ))}
+            </svg>
+          </div>
+        ) : geom && (
+          <svg
+            ref={svgRef}
+            viewBox={`0 0 ${W} ${H}`}
+            className="w-full h-auto block select-none touch-none rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--secondary-color)/60"
+            role="img"
+            aria-label={`${title} trend, ${chartPoints.length} readings. Use the left and right arrow keys to inspect each reading.`}
+            tabIndex={0}
+            onMouseMove={onMove}
+            onMouseLeave={onLeave}
+            onTouchStart={onTouch}
+            onTouchMove={onTouch}
+            onTouchEnd={onTouchEnd}
+            onFocus={onFocus}
+            onBlur={onBlur}
+            onKeyDown={onKeyDown}
+          >
+            <defs>
+              <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={color} stopOpacity="0.28" />
+                <stop offset="100%" stopColor={color} stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            {gridTicks.map((t) => (
+              <line
+                key={t}
+                x1={geom.xAt(0)}
+                x2={geom.xAt(chartPoints.length - 1)}
+                y1={geom.yAt(t)}
+                y2={geom.yAt(t)}
+                stroke="rgba(148,163,184,0.10)"
+                strokeWidth="1"
+              />
+            ))}
             <line
-              key={t}
-              x1={xAt(0)}
-              x2={xAt(chartPoints.length - 1)}
-              y1={yAt(t)}
-              y2={yAt(t)}
-              stroke="rgba(148,163,184,0.14)"
+              x1={geom.xAt(0)}
+              x2={geom.xAt(chartPoints.length - 1)}
+              y1={xAxisY}
+              y2={xAxisY}
+              stroke="rgba(148,163,184,0.22)"
               strokeWidth="1"
             />
-          ))}
-          <line
-            x1={xAt(0)}
-            x2={xAt(chartPoints.length - 1)}
-            y1={xAxisY}
-            y2={xAxisY}
-            stroke="rgba(148,163,184,0.25)"
-            strokeWidth="1"
-          />
-          {gridTicks.map((t) => (
-            <text
-              key={t}
-              x={M.left - 3}
-              y={yAt(t)}
-              textAnchor="end"
-              dominantBaseline="central"
-              fontSize="8"
-              fill="#64748B"
-              fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
-            >
-              {fmt(t)}
-            </text>
-          ))}
-          {labelIdx.map((i) => (
-            <text
-              key={i}
-              x={xAt(i)}
-              y={xAxisY + 10}
-              textAnchor={labelAnchor(i)}
-              fontSize="8"
-              fill="#64748B"
-              fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
-            >
-              {chartPoints[i].label}
-            </text>
-          ))}
-          {areaD && <path d={areaD} fill={`url(#${gid})`} />}
-          {lineD && (
-            <path d={lineD} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-          )}
-          {last && <circle cx={xAt(chartPoints.length - 1)} cy={yAt(last.value)} r="3.5" fill={color} stroke="#fff" strokeWidth="2" />}
-          {hi !== null && chartPoints[hi] && (
-            <g>
-              <line x1={xAt(hi)} y1={M.top} x2={xAt(hi)} y2={M.top + innerH} stroke="rgba(148,163,184,0.5)" strokeWidth="1" strokeDasharray="3 3" />
-              <circle cx={xAt(hi)} cy={yAt(chartPoints[hi].value)} r="5" fill={color} stroke="#fff" strokeWidth="2.5" />
-            </g>
-          )}
-        </svg>
-        
-        {hi !== null && chartPoints[hi] && (
-          <div
-            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full bg-gray-800 ring-1 ring-white/10 text-white rounded-lg px-3 py-2 text-xs shadow-xl whitespace-nowrap"
-            style={{
-              left: `${Math.max(12, Math.min(88, (xAt(hi) / W) * 100))}%`,
-              top: `${Math.max(22, (yAt(chartPoints[hi].value) / H) * 100)}%`,
-            }}
-          >
-            <p className="font-bold">{chartPoints[hi].label}</p>
-            <p className="mt-0.5 flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
-              <span className="font-mono font-semibold">
-                {fmt(chartPoints[hi].value)} {unit}
-              </span>
-            </p>
-          </div>
+            {gridTicks.map((t) => (
+              <text
+                key={t}
+                x={M.left - 3}
+                y={geom.yAt(t)}
+                textAnchor="end"
+                dominantBaseline="central"
+                fontSize="8"
+                fill="#64748B"
+              >
+                {fmt(t)}
+              </text>
+            ))}
+            {labelIdx.map((i) => (
+              <text
+                key={i}
+                x={geom.xAt(i)}
+                y={xAxisY + 10}
+                textAnchor={labelAnchor(i)}
+                fontSize="8"
+                fill="#64748B"
+              >
+                {chartPoints[i].label}
+              </text>
+            ))}
+            {areaD && <path d={areaD} fill={`url(#${gid})`} />}
+            {lineD && (
+              <path d={lineD} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            )}
+            {last && geom && (
+              <g>
+                {pulse && <circle className="dot-ping" cx={lastX} cy={lastY} r="4" fill={color} />}
+                <circle cx={lastX} cy={lastY} r="8" fill={color} opacity="0.18" />
+                <circle cx={lastX} cy={lastY} r="3.5" fill={color} stroke="#fff" strokeWidth="2" />
+              </g>
+            )}
+          </svg>
         )}
       </div>
       <div>
@@ -245,8 +348,8 @@ export default function DashboardMetricCard({
             style={{ left: `${(thresholdNominal / thresholdWarning) * 100}%` }}
           />
         </div>
-        <div className="flex justify-between text-[10px] font-bold text-gray-400 mt-1.5">
-          <span>NOMINAL ≤ {thresholdNominal} {unit}</span>
+        <div className="flex justify-between gap-2 text-xs font-bold text-gray-400 mt-1.5">
+          <span>NOMINAL ≤ {formatNumber(thresholdNominal, 0)} {unit}</span>
           <span>{statusText}</span>
         </div>
       </div>

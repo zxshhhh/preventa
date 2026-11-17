@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* Self-hosted Inter (variable weight, latin subset) — the app's single font
+   family. Works identically in the Next and vinext/Cloudflare build paths. */
+@font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url('/fonts/inter-latin-var.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 @theme inline {
     --primary-text-color: #F1F5F9;
     --gray-text-color: #94A3B8;
@@ -35,7 +46,7 @@ body {
     background-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
     background-attachment: fixed;
     color: var(--primary-text-color);
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
@@ -126,6 +137,45 @@ input[type="checkbox"]:checked::before {
     box-shadow: 0 1px 1px rgba(0, 0, 0, 0.3), 0 12px 32px -14px rgba(0, 0, 0, 0.7);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
+}
+
+@utility skeleton-shine {
+    position: relative;
+    overflow: hidden;
+}
+
+/* Tabular numerals: one font family, but live-updating numbers never jitter. */
+@utility tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+}
+
+/* Endpoint pulse ring for the LIVE trend charts (SVG circle). */
+@keyframes dot-ping {
+    0% { transform: scale(1); opacity: 0.5; }
+    80%, 100% { transform: scale(2.6); opacity: 0; }
+}
+
+.dot-ping {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: dot-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.skeleton-shine::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07) 35%, rgba(255, 255, 255, 0.13) 50%, rgba(255, 255, 255, 0.07) 65%, transparent);
+    animation: skeleton-sweep 1.8s ease-in-out infinite;
+    pointer-events: none;
+}
+
+@keyframes skeleton-sweep {
+    to {
+        transform: translateX(100%);
+    }
 }
 
 @utility btn-primary {
@@ -323,3 +373,13 @@ html.light .hover\:bg-white\/10:hover { background-color: rgb(15 23 42 / 0.08); 
 html.light .focus-visible\:bg-white\/10:focus-visible { background-color: rgb(15 23 42 / 0.08); }
 html.light .hover\:text-white:hover { color: rgb(15 23 42 / 0.9); }
 html.light .btn-segment-active { background-color: rgb(15 23 42 / 0.08); }
+
+/* Signal colors on light surfaces need darker shades for contrast. */
+html.light .text-emerald-400 { color: #059669; }
+html.light .text-amber-400 { color: #B45309; }
+html.light .text-red-400 { color: #DC2626; }
+html.light .text-rose-400 { color: #E11D48; }
+html.light .bg-emerald-400\/10 { background-color: rgb(5 150 105 / 0.12); }
+html.light .bg-amber-400\/10 { background-color: rgb(180 83 9 / 0.12); }
+html.light .bg-red-400\/10 { background-color: rgb(220 38 38 / 0.1); }
+html.light .bg-rose-400\/10 { background-color: rgb(225 29 72 / 0.1); }

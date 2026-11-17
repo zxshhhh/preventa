@@ -15,5 +15,6 @@ export const ENDPOINTS = {
   captures: '/api/v1/captures/',
   captureImage: (id: string | number) => `/api/v1/captures/${id}/image/`,
   notifications: '/api/v1/notifications/',
+  pushSubscription: '/api/v1/notifications/push-subscription/',
   baselines: '/api/v1/baselines/',
 } as const

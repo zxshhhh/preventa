@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { SensorId, SensorSeries, SeriesPoint } from '@/lib/dashboardData'
 import { isApiConfigured } from '@/lib/api/config'
 import { fetchEvents } from '@/lib/api/events'
-import { fetchLatestSeries } from '@/lib/api/telemetry'
+import { fetchLatestSeries, fetchRangeRaw } from '@/lib/api/telemetry'
 import { connectLiveTelemetry, type SensorPoint, type FusionData } from '@/lib/api/realtime'
 import { refreshAccessToken } from '@/lib/api/auth'
 import { onForegroundPush, getStoredPushToken, isPushConfigured, type PushAlert } from '@/lib/api/push'
@@ -207,6 +207,36 @@ export function SensorProvider({ children }: { children: ReactNode }) {
 
     void backfill()
     const backfillId = setInterval(backfill, BACKFILL_POLL_MS)
+
+    // One-time LIVE seed: fill the buffers with the backend's last hour so the
+    // dashboard's LIVE chart opens with a full span. Everything after this comes
+    // purely from the WebSocket stream — this is the only time-based fetch for LIVE.
+    async function seedHour() {
+      try {
+        const hour = await fetchRangeRaw('1H')
+        if (cancelled) return
+        let changed = false
+        for (const s of hour) {
+          if (!s.points.length) continue
+          const buf = buffersRef.current[s.id]
+          const lastLiveT = buf.length ? buf[buf.length - 1].t ?? 0 : 0
+          // Keep any live WS points newer than the seed's tail (race: WS may
+          // have delivered readings while the fetch was in flight).
+          const fresh = buf.filter((p) => typeof p.t === 'number' && p.t > lastLiveT)
+          // Seed is ascending; append preserved live tail so order is maintained.
+          const merged = [...s.points.filter((p) => typeof p.t === 'number' && (!lastLiveT || p.t <= lastLiveT)), ...fresh]
+          if (merged.length) {
+            buffersRef.current[s.id] = merged.slice(-MAX_BUFFER)
+            changed = true
+          }
+        }
+        if (changed) rebuildSeries()
+      } catch {
+        /* seed is best-effort — live stream continues regardless */
+      }
+    }
+
+    void seedHour()
 
     return () => {
       cancelled = true

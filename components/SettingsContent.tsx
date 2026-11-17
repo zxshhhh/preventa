@@ -461,8 +461,8 @@ function HowItWorks({ current }: { current: CalibrationMap }) {
                 <td className="py-2 pr-2 text-gray-500">{cfg.unit}</td>
                 <td className="py-2 pr-2 text-gray-500">{cfg.thresholdNominal}</td>
                 <td className="py-2 pr-2 text-gray-500">{cfg.thresholdWarning}</td>
-                <td className="py-2 pr-2 font-mono text-gray-300">{current[key].nominal}</td>
-                <td className="py-2 font-mono text-gray-300">{current[key].warning}</td>
+                <td className="py-2 pr-2 tnum text-gray-300">{current[key].nominal}</td>
+                <td className="py-2 tnum text-gray-300">{current[key].warning}</td>
               </tr>
             ))}
           </tbody>
@@ -662,7 +662,7 @@ function CalibrationStatusSection() {
       ) : (
         <>
           {baseline.createdAt && (
-            <p className="text-[11px] text-gray-400 font-mono mt-3">
+            <p className="text-[11px] text-gray-400 tnum mt-3">
               Calibrated {formatFullDate(baseline.createdAt)} · {formatTime(baseline.createdAt)}
             </p>
           )}
@@ -670,7 +670,7 @@ function CalibrationStatusSection() {
             {rows.map((r) => (
               <div key={r.label} className="rounded-xl border border-white/10 p-3">
                 <p className="text-[10px] font-extrabold tracking-wide text-gray-400">{r.label}</p>
-                <p className="text-sm font-bold text-gray-100 mt-1 font-mono">{r.value}</p>
+                <p className="text-sm font-bold text-gray-100 mt-1 tnum">{r.value}</p>
               </div>
             ))}
           </div>
@@ -808,7 +808,7 @@ function DeviceManagementSection() {
             Copy it now and enter it on the board&apos;s setup portal. It is never stored in client caches or logs.
           </p>
           <div className="flex items-center gap-2 mt-2 flex-wrap">
-            <code className="flex-1 min-w-0 truncate rounded-lg bg-black/30 px-3 py-2 text-xs font-mono text-gray-100">
+            <code className="flex-1 min-w-0 truncate rounded-lg bg-black/30 px-3 py-2 text-xs tnum text-gray-100">
               {revealed ? registered.apiKey : '•'.repeat(Math.min(24, Math.max(8, registered.apiKey.length)))}
             </code>
             <button type="button" onClick={() => setRevealed((r) => !r)} className="btn-outline btn-sm">
@@ -837,7 +837,7 @@ function DeviceManagementSection() {
               />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-bold text-gray-100 truncate">{d.name}</p>
-                <p className="text-[11px] text-gray-500 font-mono truncate">{d.hardwareId}</p>
+                <p className="text-[11px] text-gray-500 tnum truncate">{d.hardwareId}</p>
               </div>
               {confirmDeleteId === d.id ? (
                 <div className="flex items-center gap-1 shrink-0">

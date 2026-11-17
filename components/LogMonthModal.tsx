@@ -46,7 +46,7 @@ export default function LogMonthModal({ monthName, year, logs, onClose, onSelect
               >
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-gray-100">{formatFullDate(log.timestamp)}</p>
-                  <p className="text-xs font-mono text-gray-400 mt-0.5">{formatTime(log.timestamp)}</p>
+                  <p className="text-xs tnum text-gray-400 mt-0.5">{formatTime(log.timestamp)}</p>
                 </div>
                 <span className={'shrink-0 text-xs font-bold px-2.5 py-1 rounded-full whitespace-nowrap ' + statusClass(log.status)}>
                   {log.status}

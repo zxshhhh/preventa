@@ -88,6 +88,9 @@ export const SENSORS: Record<SensorId, SensorConfig> = {
 
 export const HUMIDITY_CONFIG: SensorConfig = SENSORS.humidity
 
+/** Metric card render order (gas, temperature, humidity, power). */
+export const CARD_ORDER: SensorId[] = ['mq7', 'dht22', 'humidity', 'acs712']
+
 export interface ReportReading {
   label: string
   value: number
@@ -172,17 +175,65 @@ export function levelFor(cfg: SensorConfig, value: number): { level: StatusLevel
   return { level: 'NOMINAL', color: '#34D399', label: 'NOMINAL' }
 }
 
-export function formatValue(value: number, decimals: number): string {
-  return value.toFixed(decimals)
+const numberFormatCache = new Map<number, Intl.NumberFormat>()
+
+/**
+ * Locale-formatted number with fixed decimals and thousands grouping
+ * (e.g. 1,024 PPM). One shared formatter per decimals count.
+ */
+export function formatNumber(value: number, decimals: number): string {
+  let fmt = numberFormatCache.get(decimals)
+  if (!fmt) {
+    fmt = new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    })
+    numberFormatCache.set(decimals, fmt)
+  }
+  return Number.isFinite(value) ? fmt.format(value) : '-'
 }
 
-export function deltaPercent(points: SeriesPoint[], back = 6): number {
-  if (points.length < back + 1) return 0
+/**
+ * Percent change from the FIRST point of a window to the last one —
+ * the card delta chip is anchored to the trending chart's first dot.
+ */
+export function deltaFromFirst(points: SeriesPoint[]): number {
+  if (points.length < 2) return 0
+  const first = points[0].value
   const last = points[points.length - 1].value
-  const slice = points.slice(-back - 1, -1)
-  const avg = slice.reduce((a, b) => a + b.value, 0) / slice.length
-  if (avg === 0) return 0
-  return ((last - avg) / avg) * 100
+  if (!Number.isFinite(first) || !Number.isFinite(last) || first === 0) return 0
+  return ((last - first) / Math.abs(first)) * 100
+}
+
+const RANGE_DELTA_TEXT: Record<TrendRange, string> = {
+  '1H': 'past hour',
+  '24H': 'past 24 hrs',
+  '7D': 'past 7 days',
+  '30D': 'past 30 days',
+}
+
+/** Human label for the selected trend window, e.g. "past 24 hrs". */
+export function rangeDeltaText(range: TrendRange): string {
+  return RANGE_DELTA_TEXT[range]
+}
+
+/**
+ * Full, unambiguous timestamp for the hover detail: clock-only for LIVE,
+ * "Tue, Nov 17 · 10:42 AM" for longer windows, with the year on 30D.
+ */
+export function formatFullTimestamp(ts: number | undefined, range: TrendRange): string {
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return ''
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return ''
+  const time = clockLabel(d)
+  if (range === '1H') return time
+  const date = d.toLocaleDateString(
+    'en-US',
+    range === '30D'
+      ? { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }
+      : { weekday: 'short', month: 'short', day: 'numeric' },
+  )
+  return `${date} · ${time}`
 }
 
 export function smoothPath(pts: { x: number; y: number }[]): string {
@@ -203,23 +254,75 @@ export function smoothPath(pts: { x: number; y: number }[]): string {
   return d
 }
 
-export function sparklineLayout(
-  points: SeriesPoint[],
-  width = 96,
-  height = 32,
-): { line: string; area: string; last: { x: number; y: number } | null } {
-  if (points.length < 2) return { line: '', area: '', last: null }
+/** Shared metric-card chart geometry (SVG user-space units). */
+export const CHART_VIEW = {
+  W: 320,
+  H: 130,
+  M: { top: 12, right: 8, bottom: 14, left: 34 },
+} as const
+
+export interface ChartGeom {
+  xAt: (i: number) => number
+  yAt: (v: number) => number
+  ymin: number
+  ymax: number
+}
+
+/**
+ * Scale mapper for the metric-card trend chart. Shared by the card itself and
+ * the fullscreen hover overlay so dot positions always agree, pixel for pixel.
+ */
+export function chartGeom(points: SeriesPoint[]): ChartGeom | null {
+  if (!points.length) return null
+  const { W, H, M } = CHART_VIEW
+  const innerW = W - M.left - M.right
+  const innerH = H - M.top - M.bottom
+
   const values = points.map((p) => p.value)
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const span = max - min || 1
-  const xy = points.map((p, i) => ({
-    x: (i / (points.length - 1)) * width,
-    y: height - 3 - ((p.value - min) / span) * (height - 6),
-  }))
-  const line = smoothPath(xy)
-  const area = line ? line + ` L ${width} ${height} L 0 ${height} Z` : ''
-  return { line, area, last: xy[xy.length - 1] }
+  const dataMin = Math.min(...values)
+  const dataMax = Math.max(...values)
+  const pad = (dataMax - dataMin) * 0.14 || Math.max(dataMax * 0.05, 1)
+  const ymin = dataMin - pad
+  const ymax = dataMax + pad
+
+  const xAt = (i: number) => M.left + (points.length > 1 ? (i / (points.length - 1)) * innerW : M.left)
+  const yAt = (v: number) => M.top + innerH - ((v - ymin) / (ymax - ymin)) * innerH
+  return { xAt, yAt, ymin, ymax }
+}
+
+/**
+ * Index in `points` matching a hovered dot from another card: nearest
+ * timestamp when both series are timed (bucket timestamps line up across
+ * sensors), proportional fallback otherwise. Returns -1 for empty series.
+ */
+export function alignedIndex(
+  points: SeriesPoint[],
+  hoverT: number | undefined,
+  hoverIndex: number,
+  hoverLen: number,
+): number {
+  if (!points.length) return -1
+  if (typeof hoverT === 'number' && Number.isFinite(hoverT)) {
+    let lo = 0
+    let hi = points.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      const pt = points[mid].t
+      if (typeof pt === 'number' && pt < hoverT) lo = mid + 1
+      else hi = mid
+    }
+    let best = lo
+    if (lo > 0) {
+      const a = points[lo - 1]
+      const b = points[lo]
+      const da = Math.abs((typeof a.t === 'number' ? a.t : 0) - hoverT)
+      const db = Math.abs((typeof b.t === 'number' ? b.t : 0) - hoverT)
+      if (da < db) best = lo - 1
+    }
+    return best
+  }
+  const ratio = hoverLen > 1 ? hoverIndex / (hoverLen - 1) : 0
+  return Math.round(ratio * (points.length - 1))
 }
 
 function niceNum(range: number, round: boolean): number {
