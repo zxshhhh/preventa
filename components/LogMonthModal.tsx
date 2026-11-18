@@ -25,7 +25,13 @@ export default function LogMonthModal({ monthName, year, logs, onClose, onSelect
             <h2 className="font-bold text-lg leading-tight">{monthName} {year}</h2>
             <p className="text-xs opacity-80 mt-0.5">{logs.length} {logs.length === 1 ? 'EVENT' : 'EVENTS'}</p>
           </div>
-          <button onClick={onClose} className="btn-icon-light text-2xl leading-none">&times;</button>
+          <button
+            onClick={onClose}
+            className="btn-icon-light flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-black/30 text-xl leading-none text-white hover:bg-black/40 focus-visible:ring-2 focus-visible:ring-white"
+            aria-label="Close month events"
+          >
+            &times;
+          </button>
         </div>
 
         {logs.length === 0 ? (

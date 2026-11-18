@@ -263,8 +263,8 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
         {/* Responsive detail panel */}
         <div
           className={
-            'absolute rounded-2xl border border-white/10 ' +
-            'bg-(--surface-solid)/20 shadow-2xl ' +
+            'absolute rounded-2xl border border-white/10 backdrop-blur-md ' +
+            'bg-(--surface-solid)/10 shadow-2xl ' +
             (isMobile
               ? 'p-3'
               : 'p-4')

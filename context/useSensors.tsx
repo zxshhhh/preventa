@@ -3,11 +3,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { SensorId, SensorSeries, SeriesPoint } from '@/lib/dashboardData'
 import { isApiConfigured } from '@/lib/api/config'
-import { fetchEvents } from '@/lib/api/events'
 import { fetchLatestSeries, fetchRangeRaw } from '@/lib/api/telemetry'
 import { connectLiveTelemetry, type SensorPoint, type FusionData } from '@/lib/api/realtime'
 import { refreshAccessToken } from '@/lib/api/auth'
-import { isPushConfigured, onForegroundPush } from '@/lib/api/push'
+import { isPushConfigured, onForegroundPush, parsePushAlert, type PushAlert } from '@/lib/api/push'
 
 export type EventLevel = 'WARNING' | 'CRITICAL'
 export type ToastLevel = EventLevel | 'SUCCESS'
@@ -43,11 +42,11 @@ interface SensorsContextType {
   pushToast: (title: string, message: string) => void
 }
 
-const STORAGE_KEY = 'preventa.notifications.v2'
+// Bumped to drop legacy polled /events/ history — modal notifications are push-sourced.
+const STORAGE_KEY = 'preventa.notifications.v3'
 const MAX_EVENTS = 50
 const MAX_TOASTS = 3
 const TOAST_LIFETIME_MS = 6000
-const EVENT_POLL_MS = 5000
 const BACKFILL_POLL_MS = 30_000
 
 const SensorsContext = createContext<SensorsContextType | undefined>(undefined)
@@ -115,8 +114,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<SensorEvent[]>(loadStoredEvents)
   const [toasts, setToasts] = useState<SensorToast[]>([])
 
-  const seenEventsRef = useRef<Set<string>>(new Set())
-  const eventsSeededRef = useRef(false)
+  const seenEventsRef = useRef<Set<string>>(new Set(loadStoredEvents().map((e) => e.id)))
   const wsRef = useRef<WebSocket | null>(null)
   const wsReconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const buffersRef = useRef<Record<SensorId, SeriesPoint[]>>({
@@ -246,44 +244,12 @@ export function SensorProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // Drop any legacy polled/event-log history left under the old key.
   useEffect(() => {
-    if (!isApiConfigured()) return
-    let cancelled = false
-
-    const poll = async () => {
-      try {
-        const events = await fetchEvents(MAX_EVENTS)
-        if (cancelled || !events.length) return
-
-        if (!eventsSeededRef.current) {
-          eventsSeededRef.current = true
-          events.forEach((e) => seenEventsRef.current.add(e.id))
-          setNotifications((prev) => {
-            const known = new Set(prev.map((n) => n.id))
-            const fresh = events.filter((e) => !known.has(e.id))
-            return fresh.length ? [...fresh, ...prev].slice(0, MAX_EVENTS) : prev
-          })
-          return
-        }
-
-        const fresh = events.filter((e) => !seenEventsRef.current.has(e.id))
-        if (!fresh.length) return
-        fresh.forEach((e) => seenEventsRef.current.add(e.id))
-        setNotifications((prev) => [...fresh, ...prev].slice(0, MAX_EVENTS))
-        setToasts((prev) =>
-          [...fresh.map((e) => ({ id: e.id, level: e.level, title: e.title, message: e.message })), ...prev].slice(0, MAX_TOASTS),
-        )
-        fresh.forEach((e) => tryBrowserNotify(e.title, e.message))
-      } catch {
-        /* keep local history if the events fetch fails */
-      }
-    }
-
-    void poll()
-    const id = setInterval(poll, EVENT_POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
+    try {
+      localStorage.removeItem('preventa.notifications.v2')
+    } catch {
+      /* ignore */
     }
   }, [])
 
@@ -295,40 +261,6 @@ export function SensorProvider({ children }: { children: ReactNode }) {
     }
   }, [notifications])
 
-  // Foreground Firebase push (Phase 8): render incoming FCM messages through the same
-  // toast + browser-notification pipeline. Only active after the owner enables push.
-  useEffect(() => {
-    if (!isApiConfigured()) return
-    let cancelled = false
-    let unsubscribe: (() => void) | null = null
-
-    void (async () => {
-      if (!isPushConfigured()) return
-      unsubscribe = await onForegroundPush((alert: PushAlert) => {
-        if (cancelled) return
-        setToasts((prev) =>
-          [
-            {
-              id: `push-${Date.now()}-${Math.round(Math.random() * 1e5)}`,
-              level: alert.level ?? 'WARNING',
-              title: alert.title,
-              message: alert.body,
-            },
-            ...prev,
-          ].slice(0, MAX_TOASTS),
-        )
-        tryBrowserNotify(alert.title, alert.body)
-      })
-    })()
-
-    return () => {
-      cancelled = true
-      unsubscribe?.()
-    }
-  }, [])
-
-  const markAllRead = useCallback(() => setNotifications((prev) => prev.map((n) => ({ ...n, read: true }))), [])
-
   const dismissToast = useCallback((id: string) => setToasts((prev) => prev.filter((t) => t.id !== id)), [])
 
   const pushToast = useCallback((title: string, message: string) => {
@@ -339,6 +271,84 @@ export function SensorProvider({ children }: { children: ReactNode }) {
       ].slice(0, MAX_TOASTS),
     )
   }, [])
+
+  const ingestPushAlert = useCallback(
+    (alert: PushAlert, opts: { toast: boolean; browserNotify: boolean }) => {
+      const eventId = alert.eventId != null && alert.eventId !== '' ? String(alert.eventId) : null
+      const id = eventId ?? `push-${Date.now()}-${Math.round(Math.random() * 1e5)}`
+      const level = alert.level ?? 'WARNING'
+      const title = alert.title || 'PREVENTA alert'
+      const body = alert.body || 'A new fire incident was reported.'
+
+      const isNew = eventId ? !seenEventsRef.current.has(eventId) : true
+      if (eventId) seenEventsRef.current.add(eventId)
+
+      if (isNew) {
+        const entry: SensorEvent = {
+          id,
+          sensorId: 'mq7',
+          level,
+          value: alert.tier ?? 0,
+          unit: 'tier',
+          title,
+          message: body,
+          timestamp: alert.timestamp ?? Date.now(),
+          read: false,
+        }
+        setNotifications((prev) => {
+          if (prev.some((n) => n.id === entry.id)) return prev
+          return [entry, ...prev].slice(0, MAX_EVENTS)
+        })
+      }
+
+      if (isNew && opts.toast) {
+        setToasts((prev) =>
+          [{ id: `toast-${id}-${Date.now()}`, level, title, message: body }, ...prev].slice(0, MAX_TOASTS),
+        )
+      }
+      if (isNew && opts.browserNotify) tryBrowserNotify(title, body)
+    },
+    [],
+  )
+
+  // Firebase push → modal notification log. Foreground messages arrive via FCM onMessage;
+  // background-received messages are forwarded from the service worker (sw.js).
+  useEffect(() => {
+    if (!isApiConfigured()) return
+    let cancelled = false
+    let unsubscribe: (() => void) | null = null
+
+    void (async () => {
+      if (!isPushConfigured()) return
+      unsubscribe = await onForegroundPush((alert: PushAlert) => {
+        if (cancelled) return
+        ingestPushAlert(alert, { toast: true, browserNotify: true })
+      })
+    })()
+
+    const onSwMessage = (event: MessageEvent) => {
+      const msg = event.data as { source?: string; kind?: string; data?: Record<string, string>; notification?: { title?: string; body?: string } } | null
+      if (!msg || msg.source !== 'preventa-sw' || msg.kind !== 'push') return
+      const alert = parsePushAlert(msg.data ?? {}, msg.notification ?? undefined)
+      if (!alert) return
+      const visible = typeof document !== 'undefined' && document.visibilityState === 'visible'
+      ingestPushAlert(alert, { toast: visible, browserNotify: false })
+    }
+
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', onSwMessage)
+    }
+
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+      if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', onSwMessage)
+      }
+    }
+  }, [ingestPushAlert])
+
+  const markAllRead = useCallback(() => setNotifications((prev) => prev.map((n) => ({ ...n, read: true }))), [])
 
   const unreadCount = notifications.filter((n) => !n.read).length
 

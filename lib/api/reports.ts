@@ -1,27 +1,21 @@
-import type { LogEntry, CaptureEntry } from '@/lib/logReport'
+import type {
+  LogEntry,
+  CaptureEntry,
+  ReadingEntry,
+} from '@/lib/logReport'
+
 import { apiGet, apiBlob } from './client'
 import { ENDPOINTS } from './endpoints'
 
 export type EventStatusFilter = 'active' | 'resolved' | 'false_alarm'
 
 export interface LogFilters {
-  /** Hardware device_id string from GET /devices/ (distinct from the numeric device id on events). */
-  deviceId?: string
+  /**
+   * Hardware device code.
+   * This is different from the numeric device ID stored on events.
+   */
+  deviceId?: string | number
   status?: EventStatusFilter
-}
-
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
-}
-
-function toLogTimestamp(value: unknown): string {
-  const trimmed = String(value).trim()
-  const num = Number(trimmed)
-  if (Number.isFinite(num) && /^\d+(\.\d+)?$/.test(trimmed) && trimmed.length > 8) {
-    const d = new Date(num)
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-  }
-  return trimmed
 }
 
 interface FireEvent {
@@ -42,12 +36,17 @@ interface PaginatedEvents {
   results: FireEvent[]
 }
 
+interface DeviceDetail {
+  id: number
+  device_id: string
+}
+
 interface CaptureItem {
   id: number
   device_id: number
   timestamp: string
-  image: string
-  image_url: string
+  image?: string
+  image_url?: string
   classification: string
   confidence: number | null
 }
@@ -59,18 +58,52 @@ interface PaginatedCaptures {
   results: CaptureItem[]
 }
 
+interface PaginatedReadings {
+  count?: number
+  next?: string | null
+  previous?: string | null
+  results?: Record<string, unknown>[]
+}
+
+interface RawReading {
+  id?: number | string
+  timestamp?: string
+  created_at?: string
+  recorded_at?: string
+  time?: string
+  [key: string]: unknown
+}
+
+/**
+ * How far before an event to request sensor readings.
+ *
+ * The backend saves the triggering reading just before creating
+ * the corresponding event.
+ */
+const READING_LOOKBACK_SECONDS = 5
+
+/**
+ * Captures slightly before and after the event window are included
+ * because the camera timestamp may not exactly match the event time.
+ *
+ * These margins do not prove that a capture belongs to an event.
+ */
+const CAPTURE_BEFORE_SECONDS = 10
+const CAPTURE_AFTER_SECONDS = 30
+
 function normalizeLogs(input: unknown): LogEntry[] {
   if (!input || typeof input !== 'object') return []
+
   const obj = input as PaginatedEvents
   if (!Array.isArray(obj.results)) return []
 
-  const out: LogEntry[] = []
-  for (const raw of obj.results) {
-    const peakTier = raw.peak_tier ?? 0
-    const status = peakTier >= 4 ? 'CRITICAL' : 'WARNING'
-    out.push({
-      timestamp: toLogTimestamp(raw.start_time),
-      status,
+  return obj.results.map((raw) => {
+    const peakTier = Number(raw.peak_tier ?? 0)
+
+    return {
+      eventId: raw.id,
+      timestamp: raw.start_time,
+      status: peakTier >= 4 ? 'CRITICAL' : 'WARNING',
       gas: 0,
       temperature: 0,
       humidity: 0,
@@ -81,64 +114,307 @@ function normalizeLogs(input: unknown): LogEntry[] {
       durationSeconds: raw.duration_seconds ?? undefined,
       endTime: raw.end_time ?? undefined,
       deviceId: raw.device_id,
-    })
-  }
-  return out
+    }
+  })
 }
 
 function normalizeCaptures(input: unknown): CaptureEntry[] {
   if (!input || typeof input !== 'object') return []
+
   const obj = input as PaginatedCaptures
   if (!Array.isArray(obj.results)) return []
 
   return obj.results.map((r) => ({
     id: r.id,
     timestamp: r.timestamp,
-    imageUrl: r.image_url,
+    imageUrl: r.image_url ?? r.image ?? '',
     classification: r.classification,
     confidence: r.confidence,
     deviceId: r.device_id,
   }))
 }
 
-export async function fetchLogs(filters?: LogFilters): Promise<LogEntry[]> {
-  const params = new URLSearchParams()
-  if (filters?.deviceId) params.set('device_id', filters.deviceId)
-  if (filters?.status) params.set('status', filters.status)
-  const qs = params.toString()
-  const path = qs ? `${ENDPOINTS.events}?${qs}` : ENDPOINTS.events
-  const data = await apiGet<PaginatedEvents>(path)
-  return normalizeLogs(data)
-}
+function normalizeReading(raw: Record<string, unknown>): ReadingEntry {
+  const reading = raw as RawReading
 
-export async function fetchCaptures(deviceId?: string): Promise<CaptureEntry[]> {
-  const params = new URLSearchParams()
-  if (deviceId) params.set('device_id', deviceId)
-  const path = `${ENDPOINTS.captures}?${params.toString()}`
-  const data = await apiGet<PaginatedCaptures>(path)
-  return normalizeCaptures(data)
-}
+  const timestamp =
+    reading.timestamp ??
+    reading.created_at ??
+    reading.recorded_at ??
+    reading.time ??
+    ''
 
-export function findNearestCapture(captures: CaptureEntry[], targetTimestamp: string): CaptureEntry | null {
-  if (!captures.length) return null
-  const target = new Date(targetTimestamp).getTime()
-  let best: CaptureEntry | null = null
-  let bestDiff = Infinity
-  for (const c of captures) {
-    const diff = Math.abs(new Date(c.timestamp).getTime() - target)
-    if (diff < bestDiff) {
-      bestDiff = diff
-      best = c
-    }
+  const values = { ...raw }
+
+  delete values.id
+  delete values.timestamp
+  delete values.created_at
+  delete values.recorded_at
+  delete values.time
+
+  return {
+    id: reading.id,
+    timestamp: String(timestamp),
+    values,
   }
-  return best
 }
 
 /**
- * Fetches a capture image through the authenticated route (owner JWT) and returns
- * a blob object URL. The caller is responsible for revoking the URL when done.
+ * Handles relative and absolute pagination URLs.
+ * apiGet expects a path relative to the configured API base URL.
  */
-export async function fetchCaptureImage(id: string | number): Promise<string> {
+function getRelativeApiPath(url: string): string {
+  if (url.startsWith('/')) return url
+
+  try {
+    const parsed = new URL(url)
+    return `${parsed.pathname}${parsed.search}`
+  } catch {
+    return url
+  }
+}
+
+async function fetchAllCapturePages(
+  initialPath: string,
+): Promise<CaptureEntry[]> {
+  const all: CaptureEntry[] = []
+  const visited = new Set<string>()
+
+  let path: string | null = initialPath
+
+  while (path && !visited.has(path)) {
+    visited.add(path)
+    const data: PaginatedCaptures = await apiGet<PaginatedCaptures>(path)
+
+    if (Array.isArray(data.results)) {
+      all.push(...normalizeCaptures(data))
+    }
+
+    path = data.next ? getRelativeApiPath(data.next) : null
+  }
+
+  return all
+}
+
+async function fetchAllReadingPages(
+  initialPath: string,
+): Promise<ReadingEntry[]> {
+  const all: ReadingEntry[] = []
+  const visited = new Set<string>()
+
+  let path: string | null = initialPath
+
+  while (path && !visited.has(path)) {
+    visited.add(path)
+    const data: PaginatedReadings = await apiGet<PaginatedReadings>(path)
+    if (Array.isArray(data.results)) {
+      all.push(
+        ...data.results.map((item) => normalizeReading(item)),
+      )
+    }
+
+    path = data.next ? getRelativeApiPath(data.next) : null
+  }
+
+  return all
+}
+
+/**
+ * Loads fire events.
+ */
+export async function fetchLogs(
+  filters?: LogFilters,
+): Promise<LogEntry[]> {
+  const params = new URLSearchParams()
+
+  if (filters?.deviceId) {
+    params.set('device_id', String(filters.deviceId))
+  }
+
+  if (filters?.status) {
+    params.set('status', filters.status)
+  }
+
+  const qs = params.toString()
+  const path = qs
+    ? `${ENDPOINTS.events}?${qs}`
+    : ENDPOINTS.events
+
+  const data = await apiGet<PaginatedEvents>(path)
+
+  return normalizeLogs(data)
+}
+
+/**
+ * Retrieves the actual ESP32 device code using the numeric
+ * database ID stored in event.device_id.
+ *
+ * Example:
+ * Event device_id = 3
+ * GET /api/v1/devices/3/
+ * Response device_id = "ESP32CAM_001"
+ */
+export async function fetchDeviceCode(
+  numericDeviceId: number,
+): Promise<string> {
+  const device = await apiGet<DeviceDetail>(
+    ENDPOINTS.device(numericDeviceId),
+  )
+
+  if (!device?.device_id) {
+    throw new Error(
+      `Device ${numericDeviceId} did not return a hardware device_id.`,
+    )
+  }
+
+  return String(device.device_id)
+}
+
+/**
+ * Loads readings for a specific device and event time window.
+ *
+ * The start is moved backwards by five seconds to include
+ * the reading that triggered event creation.
+ */
+export async function fetchEventReadings(
+  deviceCode: string,
+  eventStart: string,
+  eventEnd?: string | null,
+): Promise<ReadingEntry[]> {
+  const startDate = new Date(eventStart)
+
+  if (Number.isNaN(startDate.getTime())) {
+    throw new Error('Invalid event start timestamp.')
+  }
+
+  startDate.setSeconds(
+    startDate.getSeconds() - READING_LOOKBACK_SECONDS,
+  )
+
+  const endDate = eventEnd ? new Date(eventEnd) : new Date()
+
+  if (Number.isNaN(endDate.getTime())) {
+    throw new Error('Invalid event end timestamp.')
+  }
+
+  const params = new URLSearchParams({
+    device_id: deviceCode,
+    start: startDate.toISOString(),
+    end: endDate.toISOString(),
+  })
+
+  return fetchAllReadingPages(
+    `${ENDPOINTS.readings}?${params.toString()}`,
+  )
+}
+
+/**
+ * Loads all captures for a hardware device, following pagination.
+ */
+export async function fetchCaptures(
+  deviceCode: string,
+): Promise<CaptureEntry[]> {
+  const params = new URLSearchParams({
+    device_id: deviceCode,
+  })
+
+  return fetchAllCapturePages(
+    `${ENDPOINTS.captures}?${params.toString()}`,
+  )
+}
+
+/**
+ * Finds every capture within the event window, including a small
+ * timestamp margin before and after the event.
+ *
+ * Results are ordered from oldest to newest.
+ *
+ * These are nearby captures, not confirmed event-linked images.
+ */
+export function findCapturesNearEvent(
+  captures: CaptureEntry[],
+  eventStart: string,
+  eventEnd?: string | null,
+): CaptureEntry[] {
+  const start = new Date(eventStart).getTime()
+
+  const end = eventEnd
+    ? new Date(eventEnd).getTime()
+    : Date.now()
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return []
+  }
+
+  const lowerBound =
+    start - CAPTURE_BEFORE_SECONDS * 1000
+
+  const upperBound =
+    end + CAPTURE_AFTER_SECONDS * 1000
+
+  return captures
+    .filter((capture) => {
+      const timestamp = new Date(capture.timestamp).getTime()
+
+      return (
+        Number.isFinite(timestamp) &&
+        timestamp >= lowerBound &&
+        timestamp <= upperBound
+      )
+    })
+    .sort(
+      (a, b) =>
+        new Date(a.timestamp).getTime() -
+        new Date(b.timestamp).getTime(),
+    )
+}
+
+/**
+ * Returns the single reading closest to the event start.
+ *
+ * The backend saves the triggering reading just before creating the
+ * corresponding event, so the nearest reading is the most relevant one
+ * to display. Ties favour the earlier reading.
+ */
+export function findEventReading(
+  readings: ReadingEntry[],
+  eventStart: string,
+): ReadingEntry | null {
+  const start = new Date(eventStart).getTime()
+  if (!Number.isFinite(start)) return null
+
+  let closest: ReadingEntry | null = null
+  let closestTime = Number.POSITIVE_INFINITY
+  let smallestDistance = Number.POSITIVE_INFINITY
+
+  for (const reading of readings) {
+    const timestamp = new Date(reading.timestamp).getTime()
+    if (!Number.isFinite(timestamp)) continue
+
+    const distance = Math.abs(timestamp - start)
+
+    if (
+      distance < smallestDistance ||
+      (distance === smallestDistance && timestamp < closestTime)
+    ) {
+      closest = reading
+      closestTime = timestamp
+      smallestDistance = distance
+    }
+  }
+
+  return closest
+}
+
+/**
+ * Fetches an image through the authenticated route using the
+ * user's Bearer token and returns a blob object URL.
+ *
+ * The component using this URL must revoke it when finished.
+ */
+export async function fetchCaptureImage(
+  id: string | number,
+): Promise<string> {
   const blob = await apiBlob(ENDPOINTS.captureImage(id))
   return URL.createObjectURL(blob)
 }

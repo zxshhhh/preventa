@@ -5,22 +5,14 @@ import LogMonthModal from '@/components/LogMonthModal'
 import LogDetailModal from '@/components/LogDetailModal'
 import { useHydrated } from '@/lib/useHydrated'
 import { useSensors } from '@/context/useSensors'
-import { useDevices } from '@/context/useDevice'
 import type { LogEntry, MonthGroup } from '@/lib/logReport'
 import { groupByMonth, daySummary, daysInMonth, firstWeekday, monthActivity } from '@/lib/logReport'
-import { fetchLogs, type EventStatusFilter } from '@/lib/api/reports'
+import { fetchLogs } from '@/lib/api/reports'
 import { isApiConfigured } from '@/lib/api/config'
 
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
-
-type StatusChip = 'ALL' | EventStatusFilter
-
-const STATUS_CHIPS: { value: StatusChip; label: string }[] = [
-  { value: 'ALL', label: 'ALL' },
-  { value: 'active', label: 'ACTIVE' },
-  { value: 'resolved', label: 'RESOLVED' },
-  { value: 'false_alarm', label: 'FALSE ALARM' },
-]
+const SKELETON_MONTHS = Array.from({ length: 12 }, (_, i) => i)
+const SKELETON_DAY_CELLS = Array.from({ length: 35 }, (_, i) => i)
 
 /** Minimum spacing between auto refreshes (focus/reconnect/tier transitions). */
 const REFRESH_DEBOUNCE_MS = 3000
@@ -28,80 +20,43 @@ const REFRESH_DEBOUNCE_MS = 3000
 export default function LogConsole() {
   const hydrated = useHydrated()
   const { lastFusion } = useSensors()
-  const { devices, selected, setSelectedId } = useDevices()
   const [selectedMonth, setSelectedMonth] = useState<MonthGroup | null>(null)
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null)
-  const [baseLogs, setBaseLogs] = useState<LogEntry[]>([])
-  const [filteredLogs, setFilteredLogs] = useState<LogEntry[]>([])
+  const [logs, setLogs] = useState<LogEntry[]>([])
   const [yearKeys, setYearKeys] = useState<number[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [statusFilter, setStatusFilter] = useState<StatusChip>('ALL')
   const [reloadToken, setReloadToken] = useState(0)
   const lastTierRef = useRef<number | null>(null)
   const lastRefreshRef = useRef(0)
 
-  const deviceFilter = selected?.hardwareId ?? null
-  const filtered = selected !== null || statusFilter !== 'ALL'
-  const displayLogs = filtered ? filteredLogs : baseLogs
+  const months = useMemo(() => groupByMonth(logs, yearKeys), [logs, yearKeys])
 
-  const months = useMemo(() => groupByMonth(displayLogs, yearKeys), [displayLogs, yearKeys])
-  
-  const captureDeviceId = selectedLog
-    ? devices.find((device) => device.id === selectedLog.deviceId)?.hardwareId
-    : undefined
-
-  // Unfiltered fetch: builds the month skeleton so all 12 month cards stay visible
-  // no matter what the DEVICE/STATUS chips select.
   useEffect(() => {
     if (!hydrated || !isApiConfigured()) return
     let cancelled = false
     lastRefreshRef.current = Date.now()
+    setLoading(true)
+    setError(null)
+
     fetchLogs()
       .then((data) => {
         if (cancelled) return
-        setBaseLogs(data)
+        setLogs(data)
         setYearKeys(Array.from(new Set(data.map((l) => Number(l.timestamp.slice(0, 4))))).sort((a, b) => b - a))
         setError(null)
       })
       .catch(() => {
         if (!cancelled) setError('Could not load event history — check your connection and retry.')
       })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
     return () => {
       cancelled = true
     }
   }, [hydrated, reloadToken])
-
-  // Filtered fetch: drives the event dots and month-modal content only — the grid never collapses.
-  useEffect(() => {
-    if (!hydrated || !isApiConfigured()) return
-    if (!filtered) return
-    let cancelled = false
-    lastRefreshRef.current = Date.now()
-    const t = window.setTimeout(() => {
-      if (!cancelled) {
-        setLoading(true)
-        setError(null)
-      }
-    }, 0)
-    fetchLogs({
-      deviceId: deviceFilter ?? undefined,
-      status: statusFilter === 'ALL' ? undefined : statusFilter,
-    })
-      .then((data) => {
-        if (!cancelled) setFilteredLogs(data)
-      })
-      .catch(() => {
-        if (!cancelled) setError('Could not load filtered events — check your connection and retry.')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-      clearTimeout(t)
-    }
-  }, [hydrated, deviceFilter, statusFilter, reloadToken, filtered])
 
   // Refresh on screen focus and after reconnect.
   useEffect(() => {
@@ -159,6 +114,8 @@ export default function LogConsole() {
     setSelectedMonth(month)
   }
 
+  const showSkeleton = loading && months.length === 0 && !error
+
   return (
     <main className="relative">
       <div className="flex flex-col items-start mb-4 gap-1">
@@ -166,30 +123,6 @@ export default function LogConsole() {
         <p className="text-sm text-gray-400">Logs event archive by month. select a month to view its logs.</p>
         {loading && <span className="text-xs font-semibold text-amber-400">Loading live logs...</span>}
       </div>
-
-      {hydrated && isApiConfigured() && (devices.length > 0 || filtered) && (
-        <div className="flex flex-wrap items-center gap-2 mb-5">
-          {devices.length > 0 && (
-            <>
-              <span className="text-[10px] font-extrabold text-gray-400 tracking-widest">DEVICE:</span>
-              <FilterChip active={selected === null} onClick={() => setSelectedId(null)}>
-                ALL
-              </FilterChip>
-              {devices.map((d) => (
-                <FilterChip key={d.id} active={selected?.id === d.id} onClick={() => setSelectedId(d.id)}>
-                  {d.name}
-                </FilterChip>
-              ))}
-            </>
-          )}
-          <span className="text-[10px] font-extrabold text-gray-400 tracking-widest ml-1">STATUS:</span>
-          {STATUS_CHIPS.map(({ value, label }) => (
-            <FilterChip key={value} active={statusFilter === value} onClick={() => setStatusFilter(value)}>
-              {label}
-            </FilterChip>
-          ))}
-        </div>
-      )}
 
       {error && (
         <div className="panel-card p-4 mb-5 flex flex-wrap items-center justify-between gap-3 border border-red-400/25 bg-red-400/10">
@@ -204,68 +137,103 @@ export default function LogConsole() {
           No report logs recorded yet.
         </div>
       )}
-      {hydrated && !loading && !error && filtered && months.length > 0 && displayLogs.length === 0 && (
-        <p className="text-xs text-gray-500 mb-3">
-          No events match the selected filters — the calendar shows the unfiltered timeline.
-        </p>
-      )}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4 sm:gap-5 auto-rows-fr lg:min-h-[calc(100vh-9rem)]">
-        {months.map((m) => {
-          const hasLogs = m.logs.length > 0
-          const activity = monthActivity(m.logs)
-          const monthIndex = Number(m.key.slice(5, 7)) - 1
-          const totalDays = daysInMonth(m.year, monthIndex)
-          const leadCells = firstWeekday(m.year, monthIndex)
-          return (
-            <button
-              key={m.key}
-              onClick={() => openMonth(m)}
-              className={'bg-white/5 rounded-xl border-2 p-4 sm:p-5 flex flex-col gap-2 sm:gap-3 text-left transition-all duration-200 cursor-pointer min-h-44 sm:min-h-48 active:scale-[0.985] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/40 ' + (hasLogs ? 'border-(--secondary-color) hover:shadow-lg hover:-translate-y-0.5' : 'border-white/10 opacity-60 hover:opacity-90')}
+      {showSkeleton ? (
+        <div
+          className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4 sm:gap-5 auto-rows-fr lg:min-h-[calc(100vh-9rem)]"
+          role="status"
+          aria-label="Loading report logs"
+        >
+          {SKELETON_MONTHS.map((i) => (
+            <div
+              key={i}
+              aria-hidden="true"
+              className="bg-white/5 rounded-xl border-2 border-white/10 p-4 sm:p-5 flex flex-col gap-2 sm:gap-3 min-h-44 sm:min-h-48"
             >
               <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <h2 className="font-bold text-base lg:text-lg leading-tight truncate">{m.name}</h2>
-                  <p className="text-xs text-gray-400 font-semibold">{m.year}</p>
+                <div className="min-w-0 flex flex-col gap-1.5">
+                  <div className="skeleton-shine h-4 sm:h-5 w-20 rounded bg-white/10" />
+                  <div className="skeleton-shine h-3 w-10 rounded bg-white/10" />
                 </div>
-                {hasLogs ? (
-                  <span className="bg-ember text-white text-[10px] font-extrabold px-2 py-1 rounded-full whitespace-nowrap shrink-0">{m.logs.length} EVENTS</span>
-                ) : (
-                  <span className="text-[10px] font-extrabold text-gray-500 px-2 py-1 rounded-full border border-white/15 whitespace-nowrap shrink-0">NO EVENTS</span>
-                )}
+                <div className="skeleton-shine h-6 w-16 rounded-full bg-white/10 shrink-0" />
               </div>
               <div className="flex-1 flex flex-col justify-start">
-                <div className="grid grid-cols-7 gap-0.5 sm:gap-1 text-center mb-1">
-                  {WEEKDAYS.map((w, i) => (
-                    <span key={i} className="text-[9px] sm:text-[10px] font-extrabold text-gray-400">{w}</span>
+                <div className="grid grid-cols-7 gap-0.5 sm:gap-1 mb-1">
+                  {WEEKDAYS.map((_, wi) => (
+                    <div key={wi} className="skeleton-shine h-2.5 w-2.5 sm:w-3 rounded bg-white/10 mx-auto" />
                   ))}
                 </div>
                 <div className="grid grid-cols-7 gap-0.5 sm:gap-1">
-                  {Array.from({ length: leadCells }).map((_, i) => (
-                    <span key={'blank-' + i} />
+                  {SKELETON_DAY_CELLS.map((di) => (
+                    <div key={di} className="skeleton-shine h-6 sm:h-7 rounded-full bg-white/10" />
                   ))}
-                  {Array.from({ length: totalDays }).map((_, i) => {
-                    const d = i + 1
-                    const active = activity[d]
-                    const isToday = hydrated && today.getFullYear() === m.year && monthIndex === today.getMonth() && d === today.getDate()
-                    return (
-                      <span key={d} className={'flex flex-col items-center justify-center h-6 sm:h-7 rounded-full text-[11px] sm:text-xs ' + (active ? 'bg-(--secondary-color)/20 font-bold text-(--secondary-color)' : isToday ? 'bg-white/10 font-bold text-gray-100 ring-1 ring-(--secondary-color)/60' : 'text-gray-500')}>
-                        {d}
-                        <span className={'w-1 h-1 rounded-full ' + (active ? 'bg-(--secondary-color)' : 'opacity-0')} />
-                      </span>
-                    )
-                  })}
                 </div>
               </div>
               <div className="mt-auto pt-1 flex items-center justify-between gap-2 border-t border-white/10">
-                <p className={'text-xs truncate ' + (hasLogs ? 'text-gray-400' : 'text-gray-500')}>{hasLogs ? daySummary(m.logs) : 'No events recorded'}</p>
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--secondary-color)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
+                <div className="skeleton-shine h-3 w-24 rounded bg-white/10" />
+                <div className="skeleton-shine h-3.5 w-3.5 rounded bg-white/10" />
               </div>
-            </button>
-          )
-        })}
-      </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4 sm:gap-5 auto-rows-fr lg:min-h-[calc(100vh-9rem)]">
+          {months.map((m) => {
+            const hasLogs = m.logs.length > 0
+            const activity = monthActivity(m.logs)
+            const monthIndex = Number(m.key.slice(5, 7)) - 1
+            const totalDays = daysInMonth(m.year, monthIndex)
+            const leadCells = firstWeekday(m.year, monthIndex)
+            return (
+              <button
+                key={m.key}
+                onClick={() => openMonth(m)}
+                className={'bg-white/5 rounded-xl border-2 p-4 sm:p-5 flex flex-col gap-2 sm:gap-3 text-left transition-all duration-200 cursor-pointer min-h-44 sm:min-h-48 active:scale-[0.985] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/40 ' + (hasLogs ? 'border-(--secondary-color) hover:shadow-lg hover:-translate-y-0.5' : 'border-white/10 opacity-60 hover:opacity-90')}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <h2 className="font-bold text-base lg:text-lg leading-tight truncate">{m.name}</h2>
+                    <p className="text-xs text-gray-400 font-semibold">{m.year}</p>
+                  </div>
+                  {hasLogs ? (
+                    <span className="bg-ember text-white text-[10px] font-extrabold px-2 py-1 rounded-full whitespace-nowrap shrink-0">{m.logs.length} EVENTS</span>
+                  ) : (
+                    <span className="text-[10px] font-extrabold text-gray-500 px-2 py-1 rounded-full border border-white/15 whitespace-nowrap shrink-0">NO EVENTS</span>
+                  )}
+                </div>
+                <div className="flex-1 flex flex-col justify-start">
+                  <div className="grid grid-cols-7 gap-0.5 sm:gap-1 text-center mb-1">
+                    {WEEKDAYS.map((w, i) => (
+                      <span key={i} className="text-[9px] sm:text-[10px] font-extrabold text-gray-400">{w}</span>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-7 gap-0.5 sm:gap-1">
+                    {Array.from({ length: leadCells }).map((_, i) => (
+                      <span key={'blank-' + i} />
+                    ))}
+                    {Array.from({ length: totalDays }).map((_, i) => {
+                      const d = i + 1
+                      const active = activity[d]
+                      const isToday = hydrated && today.getFullYear() === m.year && monthIndex === today.getMonth() && d === today.getDate()
+                      return (
+                        <span key={d} className={'flex flex-col items-center justify-center h-6 sm:h-7 rounded-full text-[11px] sm:text-xs ' + (active ? 'bg-(--secondary-color)/20 font-bold text-(--secondary-color)' : isToday ? 'bg-white/10 font-bold text-gray-100 ring-1 ring-(--secondary-color)/60' : 'text-gray-500')}>
+                          {d}
+                          <span className={'w-1 h-1 rounded-full ' + (active ? 'bg-(--secondary-color)' : 'opacity-0')} />
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
+                <div className="mt-auto pt-1 flex items-center justify-between gap-2 border-t border-white/10">
+                  <p className={'text-xs truncate ' + (hasLogs ? 'text-gray-400' : 'text-gray-500')}>{hasLogs ? daySummary(m.logs) : 'No events recorded'}</p>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--secondary-color)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
       {selectedMonth && (
         <LogMonthModal
           monthName={selectedMonth.name}
@@ -279,25 +247,8 @@ export default function LogConsole() {
         <LogDetailModal
           log={selectedLog}
           onClose={() => setSelectedLog(null)}
-          captureDeviceId={captureDeviceId}
         />
       )}
     </main>
-  )
-}
-
-function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={
-        'btn-segment text-[10px] tracking-wide ' +
-        (active ? 'btn-segment-active' : 'text-gray-400 hover:text-gray-200')
-      }
-    >
-      {children}
-    </button>
   )
 }

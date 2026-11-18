@@ -3,10 +3,18 @@
 import { useEffect, useState } from 'react'
 import { useHydrated } from '@/lib/useHydrated'
 import { isApiConfigured } from '@/lib/api/config'
-import { fetchLogs } from '@/lib/api/reports'
-import type { LogEntry } from '@/lib/logReport'
+import {
+  fetchLogs,
+  fetchDeviceCode,
+  fetchEventReadings,
+  findEventReading,
+} from '@/lib/api/reports'
+import { formatTime } from '@/lib/logReport'
+import { formatNumber } from '@/lib/dashboardData'
+import type { LogEntry, ReadingEntry } from '@/lib/logReport'
 
 const MAX_REPORTS = 3
+const SKELETON_REPORTS = [0, 1, 2] as const
 
 const TIER_BADGE: Record<number, { badge: string; label: string }> = {
   1: { badge: 'bg-(--green-indicator)/15 text-(--green-indicator)', label: 'Normal' },
@@ -15,63 +23,119 @@ const TIER_BADGE: Record<number, { badge: string; label: string }> = {
   4: { badge: 'bg-(--red-indicator)/15 text-(--red-indicator)', label: 'Severe' },
 }
 
-function formatDate(ts: string): string {
-  return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+const READING_FIELDS = [
+  { label: 'Gas', unit: 'PPM', keys: ['smooth_ppm', 'gas', 'ppm', 'mq7'] },
+  { label: 'Temp', unit: '°C', keys: ['smooth_temperature', 'temperature', 'temp'] },
+  { label: 'Humidity', unit: '%', keys: ['smooth_humidity', 'humidity'] },
+] as const
+
+type ReadingLoadState = 'loading' | 'ready' | 'missing' | 'error'
+
+interface ReportReading {
+  state: ReadingLoadState
+  reading: ReadingEntry | null
 }
 
-function formatTime(ts: string): string {
-  return new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })
+function formatDate(ts: string): string {
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return 'Unknown date'
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function reportKey(log: LogEntry): string {
+  return log.eventId != null ? String(log.eventId) : `${log.timestamp}:${log.deviceId ?? 'na'}`
+}
+
+function readingDisplayValue(values: Record<string, unknown>, keys: readonly string[]): string {
+  for (const key of keys) {
+    const value = values[key]
+    if (
+      (typeof value === 'number' || typeof value === 'string') &&
+      value !== '' &&
+      Number.isFinite(Number(value))
+    ) {
+      return formatNumber(Number(value), 1)
+    }
+  }
+  return '—'
 }
 
 function TierBadge({ tier }: { tier: number }) {
   const cfg = TIER_BADGE[tier] ?? TIER_BADGE[1]
   return (
-    <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full whitespace-nowrap ${cfg.badge}`}>
+    <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full whitespace-nowrap ${cfg.badge}`}>
       {cfg.label} (Tier {tier})
     </span>
   )
 }
 
-function FireTypeBadge({ type }: { type: string }) {
-  const colors: Record<string, string> = {
-    smoldering: 'bg-amber-400/20 text-amber-400',
-    flaming: 'bg-red-500/20 text-red-400',
-    electrical: 'bg-yellow-400/20 text-yellow-400',
-    unknown: 'bg-gray-500/20 text-gray-400',
-    none: 'bg-green-400/20 text-green-400',
-  }
+function ReportCard({ log, reading }: { log: LogEntry; reading: ReportReading | undefined }) {
+  const hydrated = useHydrated()
+  const tier = log.peakTier ?? 1
+  const r = reading ?? { state: 'loading' as const, reading: null }
+
   return (
-    <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full whitespace-nowrap ${colors[type] ?? colors.unknown}`}>
-      {type}
-    </span>
+    <div className="border border-white/10 rounded-xl p-3 sm:p-4 flex flex-col gap-3 bg-white/5">
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+        <div className="min-w-0">
+          <p className="text-sm font-bold text-gray-100 tnum">
+            {hydrated ? formatTime(log.timestamp) : '—'}
+          </p>
+          <p className="text-xs text-gray-400 mt-0.5">
+            {hydrated ? formatDate(log.timestamp) : <span className="text-gray-500">—</span>}
+          </p>
+        </div>
+        <TierBadge tier={tier} />
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        {READING_FIELDS.map((field) => {
+          let value = '—'
+          if (r.state === 'ready' && r.reading) {
+            value = readingDisplayValue(r.reading.values, field.keys)
+          } else if (r.state === 'loading') {
+            value = '…'
+          }
+
+          return (
+            <div key={field.label} className="min-w-0 rounded-lg bg-black/20 p-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                {field.label}
+              </p>
+              <p className="mt-1 flex flex-wrap items-baseline gap-x-1">
+                <span className="tnum text-sm font-bold text-gray-100">{value}</span>
+                <span className="text-[10px] text-gray-400">{field.unit}</span>
+              </p>
+            </div>
+          )
+        })}
+      </div>
+
+      {r.state === 'error' && (
+        <p className="text-xs text-(--red-indicator)">Sensor readings unavailable.</p>
+      )}
+    </div>
   )
 }
 
-function ReportCard({ log }: { log: LogEntry }) {
-  const hydrated = useHydrated()
-
+function ReportCardSkeleton() {
   return (
-    <div className="border border-white/10 rounded-xl p-3 flex flex-col gap-2 bg-white/5">
-      <p className="text-xs tnum text-gray-400">
-        {hydrated ? (
-          <>
-            {formatDate(log.timestamp)} · <span className="font-bold text-gray-300">{formatTime(log.timestamp)}</span>
-          </>
-        ) : (
-          <span className="text-gray-500">—</span>
-        )}
-      </p>
-      <div className="flex flex-wrap items-center gap-2">
-        <TierBadge tier={log.peakTier ?? 1} />
-        <FireTypeBadge type={log.peakFireType ?? 'none'} />
-        {log.durationSeconds && (
-          <span className="text-xs tnum text-gray-300 px-2 py-0.5 rounded-full bg-white/5 border border-white/10">
-            {log.durationSeconds}s
-          </span>
-        )}
-        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${log.eventStatus === 'active' ? 'bg-red-500/20 text-red-400' : 'bg-gray-500/20 text-gray-400'}`}>
-          {log.eventStatus ?? '—'}
-        </span>
+    <div className="border border-white/10 rounded-xl p-3 sm:p-4 flex flex-col gap-3 bg-white/5" aria-hidden="true">
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+        <div className="min-w-0 flex flex-col gap-1.5">
+          <div className="skeleton-shine h-4 w-16 rounded bg-white/10" />
+          <div className="skeleton-shine h-3 w-24 rounded bg-white/10" />
+        </div>
+        <div className="skeleton-shine h-6 w-28 rounded-full bg-white/10 shrink-0" />
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        {READING_FIELDS.map((field) => (
+          <div key={field.label} className="min-w-0 rounded-lg bg-black/20 p-2.5">
+            <div className="skeleton-shine h-2.5 w-10 rounded bg-white/10" />
+            <div className="skeleton-shine mt-2 h-4 w-14 rounded bg-white/10" />
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -80,22 +144,78 @@ function ReportCard({ log }: { log: LogEntry }) {
 export default function RecentReportLog() {
   const hydrated = useHydrated()
   const [reports, setReports] = useState<LogEntry[]>([])
+  const [reportReadings, setReportReadings] = useState<Record<string, ReportReading>>({})
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     if (!hydrated || !isApiConfigured()) return
     let cancelled = false
+
     const load = async () => {
+      setLoading(true)
       try {
         const logs = await fetchLogs()
-        if (cancelled || !logs.length) return
+        if (cancelled) return
+
         const latest = [...logs]
           .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
           .slice(0, MAX_REPORTS)
+
         setReports(latest)
+
+        if (!latest.length) {
+          setReportReadings({})
+          return
+        }
+
+        const initial: Record<string, ReportReading> = {}
+        for (const log of latest) {
+          initial[reportKey(log)] = { state: 'loading', reading: null }
+        }
+        setReportReadings(initial)
+
+        const codeCache = new Map<number, string>()
+
+        await Promise.allSettled(
+          latest.map(async (log) => {
+            const key = reportKey(log)
+
+            if (log.deviceId == null) {
+              if (!cancelled) {
+                setReportReadings((prev) => ({ ...prev, [key]: { state: 'missing', reading: null } }))
+              }
+              return
+            }
+
+            try {
+              let code = codeCache.get(log.deviceId)
+              if (!code) {
+                code = await fetchDeviceCode(log.deviceId)
+                codeCache.set(log.deviceId, code)
+              }
+
+              const readings = await fetchEventReadings(code, log.timestamp, log.endTime)
+              if (cancelled) return
+
+              const closest = findEventReading(readings, log.timestamp)
+              setReportReadings((prev) => ({
+                ...prev,
+                [key]: { state: closest ? 'ready' : 'missing', reading: closest },
+              }))
+            } catch {
+              if (!cancelled) {
+                setReportReadings((prev) => ({ ...prev, [key]: { state: 'error', reading: null } }))
+              }
+            }
+          }),
+        )
       } catch {
         /* keep the last known reports if the fetch fails */
+      } finally {
+        if (!cancelled) setLoading(false)
       }
     }
+
     void load()
     return () => {
       cancelled = true
@@ -110,10 +230,16 @@ export default function RecentReportLog() {
           {reports.length}/{MAX_REPORTS}
         </span>
       </div>
-      {reports.length ? (
+      {loading ? (
+        <div className="flex flex-col gap-3" role="status" aria-label="Loading recent reports">
+          {SKELETON_REPORTS.map((i) => (
+            <ReportCardSkeleton key={i} />
+          ))}
+        </div>
+      ) : reports.length ? (
         <div className="flex flex-col gap-3">
-          {reports.map((log, i) => (
-            <ReportCard key={i} log={log} />
+          {reports.map((log) => (
+            <ReportCard key={reportKey(log)} log={log} reading={reportReadings[reportKey(log)]} />
           ))}
         </div>
       ) : (

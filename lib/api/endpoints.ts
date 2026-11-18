@@ -7,6 +7,7 @@ export const ENDPOINTS = {
   residenceContacts: (id: string | number) => `/api/v1/residences/${id}/contacts/`,
   contact: (id: string | number) => `/api/v1/contacts/${id}/`,
   devices: '/api/v1/devices/',
+  device: (id: string | number) => `/api/v1/devices/${id}/`,
   deviceRegister: '/api/v1/devices/register/',
   deviceDelete: (id: string | number) => `/api/v1/devices/${id}/delete/`,
   updateDevice: (id: string | number) => `/api/v1/devices/${id}/update/`,

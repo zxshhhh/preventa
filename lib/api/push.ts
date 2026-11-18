@@ -203,12 +203,53 @@ export interface PushAlert {
   title: string
   body: string
   level: 'WARNING' | 'CRITICAL' | null
+  /** Peak tier from the push payload when present (used for modal log value). */
+  tier: number | null
+  /** Event timestamp from the push payload when present (ms since epoch). */
+  timestamp: number | null
+}
+
+function parsePushTimestamp(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    // Accept seconds or milliseconds.
+    return raw > 1e12 ? raw : raw > 1e9 ? raw * 1000 : null
+  }
+  if (typeof raw === 'string' && raw) {
+    const asNum = Number(raw)
+    if (Number.isFinite(asNum)) return parsePushTimestamp(asNum)
+    const t = new Date(raw).getTime()
+    if (Number.isFinite(t)) return t
+  }
+  return null
+}
+
+/** Normalize an FCM push payload into a modal/toast alert. Returns null when not a PREVENTA alert. */
+export function parsePushAlert(
+  data: Record<string, string> | null | undefined,
+  notification?: { title?: string | null; body?: string | null } | null,
+): PushAlert | null {
+  const d = data ?? {}
+  // Fire-event pushes carry type === 'preventa_fire_event'; test alerts carry
+  // 'preventa_test_alert'. Missing type is tolerated defensively.
+  if (d.type && d.type !== 'preventa_fire_event' && d.type !== 'preventa_test_alert') return null
+
+  const tierRaw = Number(d.peak_tier ?? d.tier ?? 0)
+  const tier = Number.isFinite(tierRaw) && tierRaw > 0 ? tierRaw : null
+  const level = tier != null ? (tier >= 4 ? 'CRITICAL' : tier >= 3 ? 'WARNING' : null) : null
+
+  return {
+    eventId: d.event_id ?? d.eventId ?? null,
+    title: d.title || notification?.title || 'PREVENTA alert',
+    body: d.body || notification?.body || 'A new fire incident was reported.',
+    level,
+    tier,
+    timestamp: parsePushTimestamp(d.timestamp ?? d.sent_at ?? d.created_at ?? d.time),
+  }
 }
 
 /**
- * Foreground listener: renders incoming FCM messages as an in-app alert and refreshes history.
- * Returns an unsubscribe function; call it when the owner session ends. `event_id` is the
- * incident identifier.
+ * Foreground listener: intercepts incoming FCM messages. Returns an unsubscribe
+ * function; call it when the owner session ends.
  */
 export async function onForegroundPush(handler: (alert: PushAlert) => void): Promise<() => void> {
   if (typeof window === 'undefined') return () => {}
@@ -223,18 +264,11 @@ export async function onForegroundPush(handler: (alert: PushAlert) => void): Pro
     const app = fb.ensureApp(config)
     const messaging = fb.getMessaging(app)
     return fb.onMessage(messaging, (payload) => {
-      const data = (payload.data ?? {}) as Record<string, string>
-      // Backend contract: fire-event pushes carry type === 'preventa_fire_event';
-      // ignore anything else (missing type is tolerated defensively).
-      if (data.type && data.type !== 'preventa_fire_event' &&
-  data.type !== 'preventa_test_alert') return
-      const tier = Number(data.peak_tier ?? data.tier ?? 0)
-      handler({
-        eventId: data.event_id ?? null,
-        title: data.title || payload.notification?.title || 'PREVENTA alert',
-        body: data.body || payload.notification?.body || 'A new fire incident was reported.',
-        level: tier >= 4 ? 'CRITICAL' : tier >= 3 ? 'WARNING' : null,
-      })
+      const alert = parsePushAlert(
+        (payload.data ?? {}) as Record<string, string>,
+        payload.notification as { title?: string; body?: string } | undefined,
+      )
+      if (alert) handler(alert)
     })
   } catch {
     return () => {}

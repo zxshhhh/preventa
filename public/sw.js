@@ -81,7 +81,8 @@ if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagin
   const EVENT_PATH = new URL('/activity', self.location.origin)
 
   self.addEventListener('notificationclick', (event) => {
-    if (event.notification.data?.type !== 'preventa_fire_event') return
+    const type = event.notification.data?.type
+    if (type !== 'preventa_fire_event' && type !== 'preventa_test_alert') return
     event.stopImmediatePropagation()
     event.notification.close()
     event.waitUntil(self.clients.openWindow(EVENT_PATH.href))
@@ -89,11 +90,29 @@ if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagin
 
   onBackgroundMessage(getMessaging(firebaseApp), (message) => {
     const alert = message.data
-    if (alert?.type !== 'preventa_fire_event') return
-    return self.registration.showNotification(alert.title || 'PREVENTA alert', {
+    if (alert?.type !== 'preventa_fire_event' && alert?.type !== 'preventa_test_alert') return
+
+    const notify = self.registration.showNotification(alert.title || 'PREVENTA alert', {
       body: alert.body || 'A new fire incident was reported.',
       tag: `preventa-event-${alert.event_id ?? 'unknown'}`,
       data: { type: alert.type },
     })
+
+    const forward = self.clients
+      .matchAll({ type: 'window', includeUncontrolled: true })
+      .then((clients) => {
+        const payload = {
+          source: 'preventa-sw',
+          kind: 'push',
+          data: alert || {},
+          notification: message.notification
+            ? { title: message.notification.title, body: message.notification.body }
+            : null,
+        }
+        for (const client of clients) client.postMessage(payload)
+      })
+      .catch(() => {})
+
+    return Promise.all([notify, forward])
   })
 }
