@@ -45,3 +45,6 @@ AGENTS.md
 /dist/
 .vinext/
 .wrangler/
+
+*.pdf
+*.md
