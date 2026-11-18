@@ -3,6 +3,15 @@ import { API_BASE_URL, API_TIMEOUT_MS } from './config'
 export const TOKEN_KEY = 'preventa.token'
 export const REFRESH_KEY = 'preventa.refresh'
 
+/** Event fired when a refresh attempt fails and the stored session is discarded. */
+export const AUTH_EXPIRED_EVENT = 'preventa:auth-expired'
+
+/** Notify app-wide listeners (AuthProvider) that the stored session is no longer valid. */
+export function signalAuthExpired(): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
+}
+
 export class ApiError extends Error {
   readonly status: number
 
@@ -104,11 +113,18 @@ async function refreshAccessToken(): Promise<string | null> {
       if (!res.ok) throw new Error('Refresh failed')
       const data = await res.json()
       const access = data.access
-      if (access) setToken(access)
+      if (access) {
+        setToken(access)
+      } else {
+        setToken(null)
+        setRefreshToken(null)
+        signalAuthExpired()
+      }
       return access
     } catch {
       setToken(null)
       setRefreshToken(null)
+      signalAuthExpired()
       return null
     } finally {
       refreshPromise = null

@@ -23,7 +23,7 @@ interface Props {
 }
 
 const PANEL_W = 288
-const PANEL_HALF = 140
+const V_GAP = 18
 
 const subscribeNoop = () => () => {}
 const clientTrue = () => true
@@ -165,48 +165,32 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
   const vw = window.innerWidth
   const vh = window.innerHeight
 
-  // Mobile uses a bottom sheet instead of positioning beside the dot.
-  const isMobile = vw <= 640
+  const margin = 12
+  // Comfortable height for the 4-reading detail panel (avoids unnecessary scrollbars).
+  const COMFORTABLE_H = 250
+  const panelWidth = Math.min(PANEL_W, vw - margin * 2)
 
-  const panelWidth = Math.min(PANEL_W, vw - 24)
+  // Keep the panel under the point, centered horizontally and clamped on-screen.
+  const panelLeft = Math.max(margin, Math.min(x - panelWidth / 2, vw - panelWidth - margin))
 
-  const panelOnRight = x < vw / 2
+  // Prefer below; flip above when below can't fit comfortably (e.g. bottom of page / lower cards like Humidity or Power Usage).
+  const availableBelow = vh - y - V_GAP - margin
+  const availableAbove = y - V_GAP - margin
+  const canFitBelow = availableBelow >= COMFORTABLE_H
+  const canFitAbove = availableAbove >= COMFORTABLE_H
+  const placeBelow = canFitBelow ? true : canFitAbove ? false : availableBelow >= availableAbove
+  const sideSpace = placeBelow ? availableBelow : availableAbove
+  const panelMaxH = Math.max(120, Math.min(vh - margin * 2, sideSpace))
 
-  const panelLeft = Math.max(
-    12,
-    Math.min(x + 24, vw - panelWidth - 12),
-  )
-
-  const panelRight = Math.max(
-    12,
-    Math.min(vw - x + 24, vw - panelWidth - 12),
-  )
-
-  const panelTop = Math.max(
-    PANEL_HALF + 8,
-    Math.min(y, vh - PANEL_HALF - 8),
-  )
-
-  const panelStyle: CSSProperties = isMobile
-    ? {
-        left: 12,
-        right: 12,
-        bottom: 'max(12px, env(safe-area-inset-bottom))',
-        width: 'auto',
-        maxHeight: 'min(42dvh, 300px)',
-        overflowY: 'auto',
-        overscrollBehavior: 'contain',
-      }
-    : {
-        width: PANEL_W,
-        top: panelTop,
-        left: panelOnRight ? panelLeft : undefined,
-        right: panelOnRight ? undefined : panelRight,
-        transform: 'translateY(-50%)',
-        maxHeight: 'calc(100dvh - 24px)',
-        overflowY: 'auto',
-        overscrollBehavior: 'contain',
-      }
+  const panelStyle: CSSProperties = {
+    width: panelWidth,
+    left: panelLeft,
+    top: placeBelow ? y + V_GAP : y - V_GAP,
+    transform: placeBelow ? undefined : 'translateY(-100%)',
+    maxHeight: panelMaxH,
+    overflowY: 'auto',
+    overscrollBehavior: 'contain',
+  }
 
   return createPortal(
     <>
@@ -220,7 +204,7 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
           style={{
             left: x,
             background:
-              'linear-gradient(to bottom, transparent, rgba(148,163,184,0.5) 15%, rgba(148,163,184,0.5) 85%, transparent)',
+              'linear-gradient(to bottom, transparent, var(--chart-crosshair) 15%, var(--chart-crosshair) 85%, transparent)',
           }}
         />
 
@@ -253,55 +237,28 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
               style={{
                 backgroundColor: r.color,
                 boxShadow: r.active
-                  ? `0 0 0 5px ${r.color}40, 0 4px 14px rgba(0,0,0,0.45)`
+                  ? `0 0 0 5px color-mix(in srgb, ${r.color} 25%, transparent), 0 4px 14px rgba(0,0,0,0.45)`
                   : '0 2px 8px rgba(0,0,0,0.4)',
               }}
             />
           </div>
         ))}
 
-        {/* Responsive detail panel */}
+        {/* Detail panel follows the hovered point and flips near edges/corners */}
         <div
-          className={
-            'absolute rounded-2xl border border-white/10 backdrop-blur-md ' +
-            'bg-(--surface-solid)/10 shadow-2xl ' +
-            (isMobile
-              ? 'p-3'
-              : 'p-4')
-          }
+          className="absolute rounded-2xl border border-white/10 backdrop-blur-md bg-(--surface-solid)/10 shadow-2xl p-3 sm:p-4"
           style={panelStyle}
         >
           <div className="overflow-y-auto overscroll-contain">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">
+                <p className="text-xs font-bold uppercase tracking-widest text-gray-500">
                   {rangeDeltaText(range).toUpperCase()}
                 </p>
                 <p className="tnum mt-0.5 text-xs sm:text-sm font-bold text-gray-100 wrap-break-word">
                   {timestamp}
                 </p>
               </div>
-
-              {isMobile && (
-                <button
-                  type="button"
-                  onClick={() => api.setHover(null)}
-                  className="pointer-events-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/5 text-gray-400 active:bg-white/10"
-                  aria-label="Close chart details"
-                >
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  >
-                    <path d="M18 6 6 18M6 6l12 12" />
-                  </svg>
-                </button>
-              )}
             </div>
             <div className="mt-2 sm:mt-3 space-y-1">
               {rows.map((r) => (
@@ -322,7 +279,7 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
                   <span className="tnum ml-auto text-sm sm:text-base font-extrabold text-gray-100">
                     {r.label}
                   </span>
-                  <span className="w-12 shrink-0 text-right text-[10px] sm:text-[11px] font-bold text-gray-500">
+                  <span className="w-12 shrink-0 text-right text-xs font-bold text-gray-500">
                     {r.unit}
                   </span>
                 </div>

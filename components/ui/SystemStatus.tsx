@@ -75,15 +75,20 @@ export default function SystemStatus() {
         : 'Checking system status…'
 
   return (
-    <div title={title} className="flex items-center gap-1.5 select-none">
+    <div
+      title={title}
+      role="status"
+      aria-live="polite"
+      className="flex items-center gap-1.5 select-none"
+    >
       <p className="text-xs font-medium text-gray-300">System Status: </p>
-      <span className="relative flex h-2 w-2">
+      <span aria-hidden="true" className="relative flex h-2 w-2">
         {status === 'online' && (
           <span className="absolute inline-flex h-full w-full rounded-full bg-(--green-indicator) opacity-75 animate-ping" />
         )}
         <span className={`relative inline-flex rounded-full h-2 w-2 ${color}`} />
       </span>
-      <span className={`text-[9px] font-extrabold tracking-widest ${textColor}`}>
+      <span className={`text-xs font-extrabold tracking-widest ${textColor}`}>
         {label}
       </span>
     </div>

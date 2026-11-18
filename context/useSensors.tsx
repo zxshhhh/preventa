@@ -39,7 +39,8 @@ interface SensorsContextType {
   markAllRead: () => void
   toasts: SensorToast[]
   dismissToast: (id: string) => void
-  pushToast: (title: string, message: string) => void
+  /** Local (user-action) feedback toast — defaults to the success style so existing callers keep working. */
+  pushToast: (title: string, message: string, level?: ToastLevel) => void
 }
 
 // Bumped to drop legacy polled /events/ history — modal notifications are push-sourced.
@@ -263,10 +264,13 @@ export function SensorProvider({ children }: { children: ReactNode }) {
 
   const dismissToast = useCallback((id: string) => setToasts((prev) => prev.filter((t) => t.id !== id)), [])
 
-  const pushToast = useCallback((title: string, message: string) => {
+  // Hovering or focusing a toast keeps it on screen long enough to read.
+  const [toastsPaused, setToastsPaused] = useState(false)
+
+  const pushToast = useCallback((title: string, message: string, level: ToastLevel = 'SUCCESS') => {
     setToasts((prev) =>
       [
-        { id: `toast-${Date.now()}-${Math.round(Math.random() * 1e5)}`, level: 'SUCCESS' as ToastLevel, title, message },
+        { id: `toast-${Date.now()}-${Math.round(Math.random() * 1e5)}`, level, title, message },
         ...prev,
       ].slice(0, MAX_TOASTS),
     )
@@ -353,10 +357,10 @@ export function SensorProvider({ children }: { children: ReactNode }) {
   const unreadCount = notifications.filter((n) => !n.read).length
 
   useEffect(() => {
-    if (!toasts.length) return
+    if (!toasts.length || toastsPaused) return
     const timers = toasts.map((t) => setTimeout(() => dismissToast(t.id), TOAST_LIFETIME_MS))
     return () => timers.forEach(clearTimeout)
-  }, [toasts, dismissToast])
+  }, [toasts, dismissToast, toastsPaused])
 
   const value = useMemo(
     () => ({ series, lastFusion, notifications, unreadCount, markAllRead, toasts, dismissToast, pushToast }),
@@ -366,12 +370,22 @@ export function SensorProvider({ children }: { children: ReactNode }) {
   return (
     <SensorsContext.Provider value={value}>
       {children}
-      <div className="flex fixed bottom-5 left-5 right-5 sm:left-auto z-70 max-w-sm flex-col gap-2">
+      <div
+        className="flex fixed bottom-5 left-5 right-5 sm:left-auto z-70 max-w-sm flex-col gap-2"
+        role="region"
+        aria-label="Notifications"
+        aria-live="polite"
+        onMouseEnter={() => setToastsPaused(true)}
+        onMouseLeave={() => setToastsPaused(false)}
+        onFocus={() => setToastsPaused(true)}
+        onBlur={() => setToastsPaused(false)}
+      >
         {toasts.map((t) => (
           <div key={t.id} className={`${t.level === 'SUCCESS' ? 'flex' : 'hidden lg:flex'} items-start gap-3 rounded-xl bg-(--surface-solid) text-white ring-1 ring-white/10 px-4 py-3 shadow-2xl`}>
             <span
+              aria-hidden="true"
               className="mt-1 h-2.5 w-2.5 rounded-full shrink-0"
-              style={{ backgroundColor: t.level === 'SUCCESS' ? '#34D399' : t.level === 'CRITICAL' ? '#F87171' : '#FBBF24' }}
+              style={{ backgroundColor: t.level === 'SUCCESS' ? 'var(--green-indicator)' : t.level === 'CRITICAL' ? 'var(--red-indicator)' : 'var(--amber-indicator)' }}
             />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-bold">{t.title}</p>
@@ -379,9 +393,10 @@ export function SensorProvider({ children }: { children: ReactNode }) {
             </div>
             <button
               onClick={() => dismissToast(t.id)}
+              aria-label={`Dismiss notification: ${t.title}`}
               className="text-gray-400 hover:text-white text-lg leading-none cursor-pointer"
             >
-              &times;
+              <span aria-hidden="true">&times;</span>
             </button>
           </div>
         ))}

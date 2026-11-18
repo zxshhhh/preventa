@@ -170,14 +170,14 @@ export default function ProfileContent() {
                     <input
                       value={editDraft.name}
                       onChange={(e) => setEditDraft((d) => ({ ...d, name: e.target.value }))}
-                      placeholder="Contact name"
-                      className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-(--secondary-color)/40 focus:border-(--secondary-color) transition-all"
+                      aria-label="Contact name" placeholder="Contact name"
+                      className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:border-(--secondary-color) transition-all"
                     />
                     <input
                       value={editDraft.phone}
                       onChange={(e) => setEditDraft((d) => ({ ...d, phone: e.target.value }))}
-                      placeholder="Contact number"
-                      className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-(--secondary-color)/40 focus:border-(--secondary-color) transition-all"
+                      aria-label="Contact phone number" placeholder="Contact number"
+                      className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:border-(--secondary-color) transition-all"
                     />
                     <PriorityPicker
                       value={editDraft.priority}
@@ -218,14 +218,14 @@ export default function ProfileContent() {
                 <input
                   value={addDraft.name}
                   onChange={(e) => setAddDraft((d) => ({ ...d, name: e.target.value }))}
-                  placeholder="Contact name"
-                  className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-(--secondary-color)/40 focus:border-(--secondary-color) transition-all"
+                  aria-label="Contact name" placeholder="Contact name"
+                  className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:border-(--secondary-color) transition-all"
                 />
                 <input
                   value={addDraft.phone}
                   onChange={(e) => setAddDraft((d) => ({ ...d, phone: e.target.value }))}
-                  placeholder="Contact number"
-                  className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-(--secondary-color)/40 focus:border-(--secondary-color) transition-all"
+                  aria-label="Contact phone number" placeholder="Contact number"
+                  className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:border-(--secondary-color) transition-all"
                 />
                 <PriorityPicker
                   value={addDraft.priority}
@@ -270,7 +270,7 @@ export default function ProfileContent() {
 function PriorityPicker({ value, onChange }: { value: number; onChange: (value: number) => void }) {
   return (
     <div className="flex items-center gap-1.5 flex-wrap">
-      <span className="text-[10px] font-bold text-gray-400 tracking-wide">PRIORITY</span>
+      <span className="text-xs font-bold text-gray-400 tracking-wide">PRIORITY</span>
       {[1, 2, 3, 4, 5].map((p) => (
         <button
           key={p}
@@ -280,14 +280,14 @@ function PriorityPicker({ value, onChange }: { value: number; onChange: (value: 
           className={
             'h-7 w-7 rounded-lg text-xs font-extrabold transition-colors ' +
             (value === p
-              ? 'bg-(--secondary-color) text-white'
+              ? 'bg-(--secondary-color) text-(--on-accent)'
               : 'bg-white/5 border border-white/10 text-gray-400 hover:text-gray-200 hover:border-(--secondary-color)/40')
           }
         >
           {p}
         </button>
       ))}
-      <span className="text-[10px] text-gray-500 ml-1">1 = first</span>
+      <span className="text-xs text-gray-500 ml-1">1 = first</span>
     </div>
   )
 }
@@ -320,18 +320,18 @@ function ContactRow({ contact, isRecipient, confirming, onDelete, onEdit, onConf
         </p>
       </div>
       <div className="flex flex-col items-end gap-1 shrink-0">
-        <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-(--secondary-color)/10 text-(--secondary-color) whitespace-nowrap">
+        <span className="text-xs font-extrabold px-2 py-0.5 rounded-full bg-(--secondary-color)/10 text-(--secondary-color) whitespace-nowrap">
           PRIO {contact.priority}
         </span>
         {isRecipient && (
-          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-400/10 text-emerald-300 whitespace-nowrap">
+          <span className="text-xs font-extrabold px-2 py-0.5 rounded-full bg-emerald-400/10 text-emerald-300 whitespace-nowrap">
             SMS
           </span>
         )}
       </div>
       {confirming ? (
         <div className="flex items-center gap-1 shrink-0">
-          <span className="text-[10px] font-bold text-gray-400 hidden sm:inline">Delete?</span>
+          <span className="text-xs font-bold text-gray-400 hidden sm:inline">Delete?</span>
           <button onClick={onConfirmDelete} className="btn-ghost btn-sm text-(--red-indicator)">YES</button>
           <button onClick={onCancelDelete} className="btn-ghost btn-sm">NO</button>
         </div>
@@ -376,7 +376,7 @@ function StaticRow({ name, phone, badge }: { name: string; phone: string; badge:
         <p className="text-sm font-bold text-gray-100 truncate">{name}</p>
         <p className="text-xs text-gray-500">{phone}</p>
       </div>
-      <span className="text-[10px] font-extrabold px-2 py-1 rounded-full bg-emerald-400/10 text-emerald-300 whitespace-nowrap">
+      <span className="text-xs font-extrabold px-2 py-1 rounded-full bg-emerald-400/10 text-emerald-300 whitespace-nowrap">
         {badge}
       </span>
     </div>
@@ -503,21 +503,21 @@ function ResidencesSection() {
           <input
             value={addDraft.address}
             onChange={(e) => setAddDraft((d) => ({ ...d, address: e.target.value }))}
-            placeholder="Address (street, city)"
-            className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-(--secondary-color)/40 focus:border-(--secondary-color) transition-all"
+            aria-label="Residence address (street, city)" placeholder="Address (street, city)"
+            className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:border-(--secondary-color) transition-all"
           />
           <div className="grid grid-cols-2 gap-2">
             <input
               value={addDraft.latitude}
               onChange={(e) => setAddDraft((d) => ({ ...d, latitude: e.target.value }))}
-              placeholder="Latitude (optional)"
-              className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-(--secondary-color)/40 focus:border-(--secondary-color) transition-all"
+              aria-label="Residence latitude (optional)" placeholder="Latitude (optional)"
+              className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:border-(--secondary-color) transition-all"
             />
             <input
               value={addDraft.longitude}
               onChange={(e) => setAddDraft((d) => ({ ...d, longitude: e.target.value }))}
-              placeholder="Longitude (optional)"
-              className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-(--secondary-color)/40 focus:border-(--secondary-color) transition-all"
+              aria-label="Residence longitude (optional)" placeholder="Longitude (optional)"
+              className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:border-(--secondary-color) transition-all"
             />
           </div>
           <div className="flex gap-2 justify-end">
@@ -545,21 +545,21 @@ function ResidencesSection() {
                   <input
                     value={editDraft.address}
                     onChange={(e) => setEditDraft((d) => ({ ...d, address: e.target.value }))}
-                    placeholder="Address"
-                    className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-(--secondary-color)/40 focus:border-(--secondary-color) transition-all"
+                    aria-label="Residence address" placeholder="Address"
+                    className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:border-(--secondary-color) transition-all"
                   />
                   <div className="grid grid-cols-2 gap-2">
                     <input
                       value={editDraft.latitude}
                       onChange={(e) => setEditDraft((d) => ({ ...d, latitude: e.target.value }))}
-                      placeholder="Latitude"
-                      className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500"
+                      aria-label="Residence latitude" placeholder="Latitude"
+                      className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500"
                     />
                     <input
                       value={editDraft.longitude}
                       onChange={(e) => setEditDraft((d) => ({ ...d, longitude: e.target.value }))}
-                      placeholder="Longitude"
-                      className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500"
+                      aria-label="Residence longitude" placeholder="Longitude"
+                      className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500"
                     />
                   </div>
                   <div className="flex gap-2 justify-end">
@@ -583,7 +583,7 @@ function ResidencesSection() {
                 </span>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-bold text-gray-100 truncate">{entry.address || `Residence ${entry.id}`}</p>
-                  <p className="text-[11px] text-gray-500 truncate">
+                  <p className="text-xs text-gray-500 truncate">
                     {entry.latitude && entry.longitude ? `${entry.latitude}, ${entry.longitude}` : 'No coordinates'}
                     {' · '}
                     {linked === 1 ? '1 device' : `${linked} devices`}
@@ -591,7 +591,7 @@ function ResidencesSection() {
                 </div>
                 {confirmDeleteId === entry.id ? (
                   <div className="flex items-center gap-1 shrink-0">
-                    <span className="text-[10px] font-bold text-gray-400 hidden sm:inline">Deletes contacts &amp; unlinks devices —</span>
+                    <span className="text-xs font-bold text-gray-400 hidden sm:inline">Deletes contacts &amp; unlinks devices —</span>
                     <button onClick={() => removeResidence(entry)} className="btn-ghost btn-sm text-(--red-indicator)">DELETE</button>
                     <button onClick={() => setConfirmDeleteId(null)} className="btn-ghost btn-sm">CANCEL</button>
                   </div>

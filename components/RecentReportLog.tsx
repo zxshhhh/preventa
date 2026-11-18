@@ -63,7 +63,7 @@ function readingDisplayValue(values: Record<string, unknown>, keys: readonly str
 function TierBadge({ tier }: { tier: number }) {
   const cfg = TIER_BADGE[tier] ?? TIER_BADGE[1]
   return (
-    <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full whitespace-nowrap ${cfg.badge}`}>
+    <span className={`text-xs font-extrabold px-2.5 py-1 rounded-full whitespace-nowrap ${cfg.badge}`}>
       {cfg.label} (Tier {tier})
     </span>
   )
@@ -99,12 +99,12 @@ function ReportCard({ log, reading }: { log: LogEntry; reading: ReportReading | 
 
           return (
             <div key={field.label} className="min-w-0 rounded-lg bg-black/20 p-2.5">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
                 {field.label}
               </p>
               <p className="mt-1 flex flex-wrap items-baseline gap-x-1">
                 <span className="tnum text-sm font-bold text-gray-100">{value}</span>
-                <span className="text-[10px] text-gray-400">{field.unit}</span>
+                <span className="text-xs text-gray-400">{field.unit}</span>
               </p>
             </div>
           )
@@ -226,7 +226,7 @@ export default function RecentReportLog() {
     <section className="panel-card p-5 flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h2 className="font-bold text-sm text-gray-100">Recent Report Log</h2>
-        <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-(--secondary-color)/10 text-(--secondary-color)">
+        <span className="text-xs font-extrabold px-2 py-0.5 rounded-full bg-(--secondary-color)/10 text-(--secondary-color)">
           {reports.length}/{MAX_REPORTS}
         </span>
       </div>

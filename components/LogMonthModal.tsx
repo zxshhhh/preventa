@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { lockScroll } from '@/lib/scrollLock'
+import { useFocusTrap } from '@/lib/useFocusTrap'
 import type { LogEntry } from '@/lib/logReport'
 import { formatTime, formatFullDate, statusClass } from '@/lib/logReport'
 
@@ -14,15 +15,26 @@ interface Props {
 }
 
 export default function LogMonthModal({ monthName, year, logs, onClose, onSelectLog }: Props) {
+  const panelRef = useRef<HTMLDivElement | null>(null)
+
+  useFocusTrap(panelRef, true, onClose)
+
   useEffect(() => lockScroll(), [])
 
   return (
     <div className="fixed inset-0 z-50 flex items-end lg:items-center justify-center">
-      <div className="fixed inset-0" onClick={onClose} />
-      <div className="relative z-10 w-full lg:w-180 max-w-3xl max-h-[80vh] lg:max-h-[75vh] bg-(--surface-solid) rounded-t-xl lg:rounded-xl drop-shadow-2xl flex flex-col overflow-hidden">
-        <div className="bg-ember text-white px-5 py-4 flex items-center justify-between shrink-0">
+      <div className="fixed inset-0 bg-black/30" onClick={onClose} aria-hidden="true" />
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="log-month-title"
+        tabIndex={-1}
+        className="relative z-10 w-full lg:w-180 max-w-3xl max-h-[80vh] lg:max-h-[75vh] bg-(--surface-solid) rounded-t-xl lg:rounded-xl drop-shadow-2xl flex flex-col overflow-hidden"
+      >
+        <div className="bg-ember ember-grid text-(--on-ember) px-5 py-4 flex items-center justify-between shrink-0">
           <div>
-            <h2 className="font-bold text-lg leading-tight">{monthName} {year}</h2>
+            <h2 id="log-month-title" className="font-bold text-lg leading-tight">{monthName} {year}</h2>
             <p className="text-xs opacity-80 mt-0.5">{logs.length} {logs.length === 1 ? 'EVENT' : 'EVENTS'}</p>
           </div>
           <button
@@ -30,13 +42,13 @@ export default function LogMonthModal({ monthName, year, logs, onClose, onSelect
             className="btn-icon-light flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-black/30 text-xl leading-none text-white hover:bg-black/40 focus-visible:ring-2 focus-visible:ring-white"
             aria-label="Close month events"
           >
-            &times;
+            <span aria-hidden="true">&times;</span>
           </button>
         </div>
 
         {logs.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 px-6 gap-3">
-            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--info-indicator)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--info-indicator)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 12h4l3 8 4-16 3 8h4" />
             </svg>
             <p className="text-gray-400 font-bold">No events yet for {monthName} {year}</p>
@@ -48,7 +60,7 @@ export default function LogMonthModal({ monthName, year, logs, onClose, onSelect
               <button
                 key={i}
                 onClick={() => onSelectLog(log)}
-                className="w-full px-5 py-3.5 flex items-center justify-between gap-4 text-left cursor-pointer hover:bg-white/5 transition-colors focus-visible:outline-none focus-visible:bg-white/10"
+                className="w-full px-5 py-3.5 flex items-center justify-between gap-4 text-left cursor-pointer hover:bg-white/5 transition-colors"
               >
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-gray-100">{formatFullDate(log.timestamp)}</p>

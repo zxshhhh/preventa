@@ -1,9 +1,15 @@
-﻿import DashboardContent from '@/components/DashboardContent'
+﻿import type { Metadata } from 'next'
+import DashboardContent from '@/components/DashboardContent'
+
+export const metadata: Metadata = {
+  title: 'Activity',
+  description: 'Live sensor readings and fire risk status.',
+}
 
 export default function DashboardPage() {
   return (
-    <main className="relative">
+    <div className="relative">
       <DashboardContent />
-    </main>
+    </div>
   )
 }

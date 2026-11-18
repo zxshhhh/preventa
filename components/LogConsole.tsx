@@ -24,34 +24,45 @@ export default function LogConsole() {
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [yearKeys, setYearKeys] = useState<number[]>([])
+  const [selectedYear, setSelectedYear] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
   const lastTierRef = useRef<number | null>(null)
   const lastRefreshRef = useRef(0)
 
-  const months = useMemo(() => groupByMonth(logs, yearKeys), [logs, yearKeys])
+  const months = useMemo(
+    () => groupByMonth(logs, selectedYear ? [selectedYear] : yearKeys),
+    [logs, selectedYear, yearKeys],
+  )
 
   useEffect(() => {
     if (!hydrated || !isApiConfigured()) return
     let cancelled = false
-    lastRefreshRef.current = Date.now()
-    setLoading(true)
-    setError(null)
 
-    fetchLogs()
-      .then((data) => {
+    // Deferred into an async function so the reset setState calls aren't synchronous in the effect body.
+    const load = async () => {
+      lastRefreshRef.current = Date.now()
+      setLoading(true)
+      setError(null)
+
+      try {
+        const data = await fetchLogs()
         if (cancelled) return
         setLogs(data)
-        setYearKeys(Array.from(new Set(data.map((l) => Number(l.timestamp.slice(0, 4))))).sort((a, b) => b - a))
+        const years = Array.from(new Set(data.map((l) => Number(l.timestamp.slice(0, 4))))).sort((a, b) => b - a)
+        setYearKeys(years)
+        // Keep the current year while it still has data, otherwise fall back to the newest year available.
+        setSelectedYear((prev) => (prev !== null && years.includes(prev) ? prev : years[0] ?? null))
         setError(null)
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setError('Could not load event history — check your connection and retry.')
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    }
+
+    void load()
 
     return () => {
       cancelled = true
@@ -117,11 +128,30 @@ export default function LogConsole() {
   const showSkeleton = loading && months.length === 0 && !error
 
   return (
-    <main className="relative">
+    <div className="relative">
       <div className="flex flex-col items-start mb-4 gap-1">
         <h1 className="font-bold text-2xl">Report Logs</h1>
-        <p className="text-sm text-gray-400">Logs event archive by month. select a month to view its logs.</p>
+        <p className="text-sm text-gray-400">Logs event archive by month. choose a year, then select a month to view its logs.</p>
         {loading && <span className="text-xs font-semibold text-amber-400">Loading live logs...</span>}
+        {hydrated && yearKeys.length > 0 && (
+          <label className="mt-2 flex items-center gap-2 text-xs font-semibold text-gray-400">
+            YEAR
+            <select
+              aria-label="Select year"
+              className="input-profile w-auto"
+              value={selectedYear ?? ''}
+              onChange={(e) => {
+                setSelectedYear(Number(e.target.value))
+                setSelectedLog(null)
+                setSelectedMonth(null)
+              }}
+            >
+              {yearKeys.map((year) => (
+                <option key={year} value={year}>{year}</option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
 
       {error && (
@@ -149,7 +179,7 @@ export default function LogConsole() {
               aria-hidden="true"
               className="bg-white/5 rounded-xl border-2 border-white/10 p-4 sm:p-5 flex flex-col gap-2 sm:gap-3 min-h-44 sm:min-h-48"
             >
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-col items-start gap-1.5">
                 <div className="min-w-0 flex flex-col gap-1.5">
                   <div className="skeleton-shine h-4 sm:h-5 w-20 rounded bg-white/10" />
                   <div className="skeleton-shine h-3 w-10 rounded bg-white/10" />
@@ -187,23 +217,23 @@ export default function LogConsole() {
               <button
                 key={m.key}
                 onClick={() => openMonth(m)}
-                className={'bg-white/5 rounded-xl border-2 p-4 sm:p-5 flex flex-col gap-2 sm:gap-3 text-left transition-all duration-200 cursor-pointer min-h-44 sm:min-h-48 active:scale-[0.985] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/40 ' + (hasLogs ? 'border-(--secondary-color) hover:shadow-lg hover:-translate-y-0.5' : 'border-white/10 opacity-60 hover:opacity-90')}
+                className={'bg-white/5 rounded-xl border-2 p-4 sm:p-5 flex flex-col gap-2 sm:gap-3 text-left transition-all duration-200 cursor-pointer min-h-44 sm:min-h-48 active:scale-[0.985] focus-visible:ring-2 focus-visible:ring-(--focus-ring) ' + (hasLogs ? 'border-(--secondary-color) hover:shadow-lg hover:-translate-y-0.5' : 'border-white/10 opacity-60 hover:opacity-90')}
               >
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-col items-start gap-1.5">
                   <div className="min-w-0">
                     <h2 className="font-bold text-base lg:text-lg leading-tight truncate">{m.name}</h2>
                     <p className="text-xs text-gray-400 font-semibold">{m.year}</p>
                   </div>
                   {hasLogs ? (
-                    <span className="bg-ember text-white text-[10px] font-extrabold px-2 py-1 rounded-full whitespace-nowrap shrink-0">{m.logs.length} EVENTS</span>
+                    <span className="bg-ember text-(--on-ember) text-xs font-extrabold px-2 py-1 rounded-full whitespace-nowrap shrink-0">{m.logs.length} EVENTS</span>
                   ) : (
-                    <span className="text-[10px] font-extrabold text-gray-500 px-2 py-1 rounded-full border border-white/15 whitespace-nowrap shrink-0">NO EVENTS</span>
+                    <span className="text-xs font-extrabold text-gray-500 px-2 py-1 rounded-full border border-white/25 whitespace-nowrap shrink-0">NO EVENTS</span>
                   )}
                 </div>
                 <div className="flex-1 flex flex-col justify-start">
                   <div className="grid grid-cols-7 gap-0.5 sm:gap-1 text-center mb-1">
                     {WEEKDAYS.map((w, i) => (
-                      <span key={i} className="text-[9px] sm:text-[10px] font-extrabold text-gray-400">{w}</span>
+                      <span key={i} className="text-xs font-extrabold text-gray-400">{w}</span>
                     ))}
                   </div>
                   <div className="grid grid-cols-7 gap-0.5 sm:gap-1">
@@ -215,7 +245,7 @@ export default function LogConsole() {
                       const active = activity[d]
                       const isToday = hydrated && today.getFullYear() === m.year && monthIndex === today.getMonth() && d === today.getDate()
                       return (
-                        <span key={d} className={'flex flex-col items-center justify-center h-6 sm:h-7 rounded-full text-[11px] sm:text-xs ' + (active ? 'bg-(--secondary-color)/20 font-bold text-(--secondary-color)' : isToday ? 'bg-white/10 font-bold text-gray-100 ring-1 ring-(--secondary-color)/60' : 'text-gray-500')}>
+                        <span key={d} className={'flex flex-col items-center justify-center h-6 sm:h-7 rounded-full text-xs ' + (active ? 'bg-(--secondary-color)/20 font-bold text-(--secondary-color)' : isToday ? 'bg-white/10 font-bold text-gray-100 ring-1 ring-(--secondary-color)/60' : 'text-gray-500')}>
                           {d}
                           <span className={'w-1 h-1 rounded-full ' + (active ? 'bg-(--secondary-color)' : 'opacity-0')} />
                         </span>
@@ -249,6 +279,6 @@ export default function LogConsole() {
           onClose={() => setSelectedLog(null)}
         />
       )}
-    </main>
+    </div>
   )
 }

@@ -31,7 +31,7 @@ export default function UserAvatar({ size = 'md', className = '' }: UserAvatarPr
       aria-label={username ? `${username} profile avatar` : 'Profile avatar'}
       title={username ?? undefined}
       className={
-        'rounded-full bg-ember text-white font-extrabold flex items-center justify-center select-none shrink-0 ' +
+        'rounded-full bg-ember text-(--on-ember) font-extrabold flex items-center justify-center select-none shrink-0 ' +
         SIZE_CLASS[size] +
         (className ? ' ' + className : '')
       }

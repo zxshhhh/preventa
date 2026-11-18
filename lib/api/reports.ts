@@ -220,6 +220,32 @@ async function fetchAllReadingPages(
 }
 
 /**
+ * Loads every page of fire events so callers can see the full history,
+ * including events from older years that aren't on the first page.
+ */
+async function fetchAllEventPages(
+  initialPath: string,
+): Promise<LogEntry[]> {
+  const all: LogEntry[] = []
+  const visited = new Set<string>()
+
+  let path: string | null = initialPath
+
+  while (path && !visited.has(path)) {
+    visited.add(path)
+    const data: PaginatedEvents = await apiGet<PaginatedEvents>(path)
+
+    if (Array.isArray(data.results)) {
+      all.push(...normalizeLogs(data))
+    }
+
+    path = data.next ? getRelativeApiPath(data.next) : null
+  }
+
+  return all
+}
+
+/**
  * Loads fire events.
  */
 export async function fetchLogs(
@@ -240,9 +266,7 @@ export async function fetchLogs(
     ? `${ENDPOINTS.events}?${qs}`
     : ENDPOINTS.events
 
-  const data = await apiGet<PaginatedEvents>(path)
-
-  return normalizeLogs(data)
+  return fetchAllEventPages(path)
 }
 
 /**

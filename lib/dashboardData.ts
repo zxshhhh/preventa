@@ -35,7 +35,7 @@ export const SENSORS: Record<SensorId, SensorConfig> = {
     name: 'Gas Concentration',
     unit: 'PPM',
     decimals: 0,
-    color: '#60A5FA',
+    color: 'var(--sensor-gas)',
     thresholdNominal: 50,
     thresholdWarning: 100,
     min: 10,
@@ -50,7 +50,7 @@ export const SENSORS: Record<SensorId, SensorConfig> = {
     name: 'Temperature',
     unit: '°C',
     decimals: 1,
-    color: '#FB923C',
+    color: 'var(--sensor-temp)',
     thresholdNominal: 40,
     thresholdWarning: 50,
     min: 16,
@@ -63,7 +63,7 @@ export const SENSORS: Record<SensorId, SensorConfig> = {
     name: 'Power Usage',
     unit: 'AMPS',
     decimals: 2,
-    color: '#FACC15',
+    color: 'var(--sensor-power)',
     thresholdNominal: 6,
     thresholdWarning: 8,
     min: 1.5,
@@ -76,7 +76,7 @@ export const SENSORS: Record<SensorId, SensorConfig> = {
     name: 'Humidity',
     unit: '%',
     decimals: 0,
-    color: '#22D3EE',
+    color: 'var(--sensor-humidity)',
     thresholdNominal: 90,
     thresholdWarning: 100,
     min: 30,
@@ -177,9 +177,9 @@ export function bucketPoints(points: SeriesPoint[], range: TrendRange): SeriesPo
 }
 
 export function levelFor(cfg: SensorConfig, value: number): { level: StatusLevel; color: string; label: string } {
-  if (value > cfg.thresholdWarning) return { level: 'CRITICAL', color: '#F87171', label: 'CRITICAL' }
-  if (value > cfg.thresholdNominal) return { level: 'WARNING', color: '#FBBF24', label: 'WARNING' }
-  return { level: 'NOMINAL', color: '#34D399', label: 'NOMINAL' }
+  if (value > cfg.thresholdWarning) return { level: 'CRITICAL', color: 'var(--signal-critical)', label: 'CRITICAL' }
+  if (value > cfg.thresholdNominal) return { level: 'WARNING', color: 'var(--signal-warning)', label: 'WARNING' }
+  return { level: 'NOMINAL', color: 'var(--signal-nominal)', label: 'NOMINAL' }
 }
 
 const numberFormatCache = new Map<number, Intl.NumberFormat>()

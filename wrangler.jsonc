@@ -17,12 +17,29 @@
   "version_metadata": {"binding":"CF_VERSION_METADATA"},
   "cache": {"enabled":false},
   "vars": {
-    "NEXT_PUBLIC_API_URL": "https://preventa.duckdns.org"
+    "NEXT_PUBLIC_API_URL": "https://preventa.duckdns.org",
+    "NEXT_PUBLIC_FIREBASE_API_KEY": "AIzaSyC_xy9zo6gFQQpt8iLt3tnDrsF1SUFQ27E",
+    "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN": "preventa-b3634.firebaseapp.com",
+    "NEXT_PUBLIC_FIREBASE_PROJECT_ID": "preventa-b3634",
+    "NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "364891268058",
+    "NEXT_PUBLIC_FIREBASE_APP_ID": "1:364891268058:web:35ef101a64bdc1d56896e3",
+    "NEXT_PUBLIC_FIREBASE_VAPID_KEY": "BC1LAS7MPfHmpUfuAuMYj6QR8eYtD7Va_Vv6G6jK14RPm73Z28JbM_f-ydm-GiX2Gn9DYG9GtP6Azc92G_sBA9g",
+    "NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID": "G-0Z7K9X1J3C",
   },
   "observability": {
+    "enabled": false,
+    "head_sampling_rate": 1,
+    "redact_query_string": false,
     "logs": {
-      "enabled": false,
-      "invocation_logs": true
-    }
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true
+    },
   }
 }

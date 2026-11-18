@@ -130,7 +130,7 @@ export default function DashboardSensorCards({ series, chartSeries, range, onRan
       color: cfg.color,
       status: last
         ? levelFor(cfg, current)
-        : { level: 'NOMINAL' as StatusLevel, color: '#64748B', label: 'NO DATA' },
+        : { level: 'NOMINAL' as StatusLevel, color: 'var(--info-indicator)', label: 'NO DATA' },
       statusText: `WARNING > ${formatNumber(cfg.thresholdWarning, 0)} ${cfg.unit}`,
       thresholdNominal: cfg.thresholdNominal,
       thresholdWarning: cfg.thresholdWarning,

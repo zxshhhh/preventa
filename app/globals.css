@@ -24,6 +24,17 @@
     --ember-end: #FF9F3C;
     --secondary-color: #FF8350;
 
+    /* Foregrounds for filled brand / accent / danger surfaces. Dark ink keeps
+       white-on-ember text above WCAG AA contrast instead of ~2:1. */
+    --on-ember: #1A1005;
+    --on-ember-80: rgba(26, 16, 5, 0.8);
+    --on-ember-90: rgba(26, 16, 5, 0.9);
+    --on-ember-30: rgba(26, 16, 5, 0.3);
+    --on-accent: #1A1005;
+    --on-danger: #FFFFFF;
+
+    --focus-ring: #FFB37A;
+
     --green-indicator: #34D399;
     --amber-indicator: #FBBF24;
     --red-indicator: #F87171;
@@ -31,9 +42,30 @@
     --cyan-indicator: #22D3EE;
     --yellow-indicator: #FACC15;
     --orange-indicator: #FB923C;
-    --info-indicator: #64748B;
+    --info-indicator: #94A3B8;
+
+    /* Data-viz tokens: chart lines, status bars and axis labels are themed
+       through CSS variables so light / high-contrast modes stay readable. */
+    --sensor-gas: #60A5FA;
+    --sensor-temp: #FB923C;
+    --sensor-power: #FACC15;
+    --sensor-humidity: #22D3EE;
+    --signal-nominal: #34D399;
+    --signal-warning: #FBBF24;
+    --signal-critical: #F87171;
+    --chart-axis: #94A3B8;
+    --chart-grid: rgba(148, 163, 184, 0.10);
+    --chart-grid-strong: rgba(148, 163, 184, 0.25);
+    --chart-crosshair: rgba(148, 163, 184, 0.5);
+    --chart-dot-ring: #FFFFFF;
 
     --input-color: #0F172A;
+}
+
+/* gray-500 is used for small secondary labels; the stock Tailwind value only
+   reaches 4.02:1 on the dark canvas. Light-mode override lives below. */
+html:root {
+    --color-gray-500: #7C8CA3;
 }
 
 body {
@@ -57,6 +89,7 @@ body {
 
 html {
     overflow-y: scroll;
+    color-scheme: dark;
 }
 
 * {
@@ -121,7 +154,34 @@ input[type="checkbox"]:checked::before {
 }
 
 @utility input-profile {
-    @apply h-10 rounded-lg px-3 focus:outline-none focus:ring-2 focus:ring-(--secondary-color)/50 bg-white/5 border border-white/10 text-gray-100 placeholder:text-gray-500 transition-all duration-300 ease-in-out;
+    @apply h-10 rounded-lg px-3 bg-white/5 border border-white/40 text-gray-100 placeholder:text-gray-500 transition-all duration-300 ease-in-out;
+}
+
+/* Native select popups don't reliably inherit the page palette — without
+   explicit colors the option list can render white-on-white in dark mode. */
+select {
+    color-scheme: dark;
+    background-color: var(--surface-solid);
+    color: var(--primary-text-color);
+}
+
+select option,
+select optgroup {
+    background-color: var(--surface-solid);
+    color: var(--primary-text-color);
+}
+
+select option:checked {
+    background-color: var(--secondary-color);
+    color: var(--on-accent);
+}
+
+html.light select {
+    color-scheme: light;
+}
+
+@utility skip-link {
+    @apply sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-100 focus:rounded-lg focus:bg-(--surface-solid) focus:px-4 focus:py-2 focus:text-sm focus:font-bold focus:text-(--secondary-color) focus:shadow-lg;
 }
 
 @utility glow-buttons {
@@ -130,6 +190,42 @@ input[type="checkbox"]:checked::before {
 
 @utility bg-ember {
     background-image: linear-gradient(135deg, var(--ember-start), var(--ember-end));
+}
+
+/* Optional overlay for large ember gradient surfaces: a white grid rotated 45°
+   that drifts by exactly one 32px cell, so the loop repeats seamlessly. */
+@utility ember-grid {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+}
+
+.ember-grid::before {
+    content: '';
+    position: absolute;
+    /* Oversize far beyond the host so the rotated layer still covers the
+       corners of wide, short headers (a 100% inset leaves them exposed). */
+    inset: -100vmax;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+        linear-gradient(rgba(255, 255, 255, 0.32) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.32) 1px, transparent 1px);
+    background-size: 32px 32px;
+    transform: rotate(45deg) translate3d(0, 0, 0);
+    animation: ember-grid-drift 3s linear infinite;
+}
+
+@keyframes ember-grid-drift {
+    /* Translating along a single local axis keeps the on-screen motion
+       diagonal; one full 32px cell makes the loop seamless. */
+    to {
+        transform: rotate(45deg) translate3d(32px, 0, 0);
+    }
+}
+
+html.a11y-reduce-motion .ember-grid::before {
+    animation: none;
 }
 
 @utility panel-card {
@@ -179,7 +275,7 @@ input[type="checkbox"]:checked::before {
 }
 
 @utility btn-primary {
-    @apply inline-flex items-center justify-center gap-2 text-white font-bold rounded-xl cursor-pointer transition-all duration-200 hover:-translate-y-0.5 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) disabled:opacity-50 disabled:pointer-events-none;
+    @apply inline-flex items-center justify-center gap-2 text-(--on-ember) font-bold rounded-xl cursor-pointer transition-all duration-200 hover:-translate-y-0.5 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-(--focus-ring) focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) disabled:opacity-50 disabled:pointer-events-none;
     background-image: linear-gradient(135deg, var(--ember-start), var(--ember-end));
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 10px 22px -10px rgba(255, 94, 60, 0.65);
 
@@ -195,7 +291,7 @@ input[type="checkbox"]:checked::before {
 }
 
 @utility btn-outline {
-    @apply inline-flex items-center justify-center gap-2 border border-(--secondary-color)/50 text-(--secondary-color) font-bold rounded-xl cursor-pointer transition-all duration-200 hover:bg-(--secondary-color)/10 hover:border-(--secondary-color) active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) disabled:opacity-50 disabled:pointer-events-none;
+    @apply inline-flex items-center justify-center gap-2 border border-(--secondary-color)/50 text-(--secondary-color) font-bold rounded-xl cursor-pointer transition-all duration-200 hover:bg-(--secondary-color)/10 hover:border-(--secondary-color) active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-(--focus-ring) focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) disabled:opacity-50 disabled:pointer-events-none;
 
     &:hover {
         box-shadow: 0 8px 18px -10px rgba(255, 131, 80, 0.45);
@@ -203,11 +299,11 @@ input[type="checkbox"]:checked::before {
 }
 
 @utility btn-ghost {
-    @apply inline-flex items-center justify-center gap-2 text-gray-400 font-bold rounded-xl cursor-pointer transition-all duration-200 hover:text-(--secondary-color) hover:bg-white/5 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/40 focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) disabled:opacity-50 disabled:pointer-events-none;
+    @apply inline-flex items-center justify-center gap-2 text-gray-400 font-bold rounded-xl cursor-pointer transition-all duration-200 hover:text-(--secondary-color) hover:bg-white/5 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-(--focus-ring) focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) disabled:opacity-50 disabled:pointer-events-none;
 }
 
 @utility btn-icon {
-    @apply inline-flex items-center justify-center rounded-xl p-2 text-gray-400 hover:text-(--secondary-color) hover:bg-white/5 cursor-pointer transition-all duration-200 active:scale-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/40 focus-visible:ring-offset-2;
+    @apply inline-flex items-center justify-center rounded-xl p-2 text-gray-400 hover:text-(--secondary-color) hover:bg-white/5 cursor-pointer transition-all duration-200 active:scale-90 focus-visible:ring-2 focus-visible:ring-(--focus-ring) focus-visible:ring-offset-2;
 }
 
 @utility btn-icon-light {
@@ -227,7 +323,7 @@ input[type="checkbox"]:checked::before {
 }
 
 @utility btn-segment {
-    @apply px-3 py-1.5 rounded-lg text-xs cursor-pointer transition-all hover:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ember-start)/40;
+    @apply px-3 py-1.5 rounded-lg text-xs cursor-pointer transition-all hover:text-gray-200 focus-visible:ring-2 focus-visible:ring-(--focus-ring);
 }
 
 @utility btn-segment-active {
@@ -297,12 +393,39 @@ html.light {
     color-scheme: light;
 
     --primary-text-color: #1E293B;
-    --gray-text-color: #64748B;
+    --gray-text-color: #52627A;
 
     --bg-color: #F1F3F8;
     --surface-color: rgba(15, 23, 42, 0.035);
     --surface-border: rgba(15, 23, 42, 0.12);
     --surface-solid: #FFFFFF;
+
+    /* Darkened accent so orange text/borders stay AA on a light canvas. */
+    --secondary-color: #C2410C;
+    --on-accent: #FFFFFF;
+    --focus-ring: #9A3412;
+
+    --green-indicator: #047857;
+    --amber-indicator: #B45309;
+    --red-indicator: #B91C1C;
+    --blue-indicator: #1D4ED8;
+    --cyan-indicator: #0E7490;
+    --yellow-indicator: #A16207;
+    --orange-indicator: #C2410C;
+    --info-indicator: #475569;
+
+    --sensor-gas: #1D4ED8;
+    --sensor-temp: #C2410C;
+    --sensor-power: #A16207;
+    --sensor-humidity: #0E7490;
+    --signal-nominal: #047857;
+    --signal-warning: #B45309;
+    --signal-critical: #B91C1C;
+    --chart-axis: #52627A;
+    --chart-grid: rgba(15, 23, 42, 0.10);
+    --chart-grid-strong: rgba(15, 23, 42, 0.24);
+    --chart-crosshair: rgba(15, 23, 42, 0.45);
+    --chart-dot-ring: #FFFFFF;
 
     --input-color: #FFFFFF;
 
@@ -311,13 +434,14 @@ html.light {
     --color-gray-200: #1E293B;
     --color-gray-300: #334155;
     --color-gray-400: #475569;
-    --color-gray-500: #64748B;
-    --color-emerald-300: #059669;
+    --color-gray-500: #52627A;
+    --color-emerald-300: #047857;
     --color-amber-300: #B45309;
-    --color-red-300: #DC2626;
+    --color-red-300: #B91C1C;
 }
 
-html.light :is(.bg-ember, .btn-primary, .bg-red-500, .bg-gray-800, .bg-black\/40) {
+/* Dark overlays / danger chips keep their white foreground in light mode. */
+html.light :is(.bg-red-500, .bg-red-600, .bg-gray-800, .bg-black\/30, .bg-black\/40, .bg-black\/50) {
     --color-white: #ffffff;
     color: #ffffff;
 }
@@ -359,14 +483,26 @@ html.light .scroll-thin::-webkit-scrollbar-thumb {
     background: rgba(15, 23, 42, 0.2);
 }
 
-html.light input[type="checkbox"] {
+/* Scope to the unchecked state: a bare `html.light input[type="checkbox"]` beats
+   the base `input[type="checkbox"]:checked` rule on specificity (0,2,2 vs 0,2,1),
+   which left a checked box with a near-white fill and an invisible white tick. */
+html.light input[type="checkbox"]:not(:checked) {
     background-color: rgba(15, 23, 42, 0.06);
 }
 
 html.light .bg-white\/5 { background-color: rgb(15 23 42 / 0.06); }
 html.light .bg-white\/10 { background-color: rgb(15 23 42 / 0.08); }
+
+/* The default shimmer is a white sweep for the dark canvas — on light surfaces
+   it washes out. Use a darker, higher-contrast sweep so loading is visible. */
+html.light .skeleton-shine::after {
+    background-image: linear-gradient(90deg, transparent, rgba(15, 23, 42, 0.08) 35%, rgba(15, 23, 42, 0.2) 50%, rgba(15, 23, 42, 0.08) 65%, transparent);
+}
 html.light .border-white\/10 { border-color: rgb(15 23 42 / 0.12); }
 html.light .border-white\/15 { border-color: rgb(15 23 42 / 0.16); }
+html.light .border-white\/25 { border-color: rgb(15 23 42 / 0.28); }
+html.light .border-white\/30 { border-color: rgb(15 23 42 / 0.34); }
+html.light .border-white\/40 { border-color: rgb(15 23 42 / 0.45); }
 html.light .ring-white\/10 { --tw-ring-color: rgb(15 23 42 / 0.1); }
 html.light .hover\:bg-white\/5:hover { background-color: rgb(15 23 42 / 0.06); }
 html.light .hover\:bg-white\/10:hover { background-color: rgb(15 23 42 / 0.08); }
@@ -383,3 +519,158 @@ html.light .bg-emerald-400\/10 { background-color: rgb(5 150 105 / 0.12); }
 html.light .bg-amber-400\/10 { background-color: rgb(180 83 9 / 0.12); }
 html.light .bg-red-400\/10 { background-color: rgb(220 38 38 / 0.1); }
 html.light .bg-rose-400\/10 { background-color: rgb(225 29 72 / 0.1); }
+
+/* ---------- Accessibility: high contrast ---------- */
+
+html.a11y-high-contrast {
+    --primary-text-color: #FFFFFF;
+    --gray-text-color: #E2E8F0;
+    --bg-color: #000000;
+    --surface-color: rgba(255, 255, 255, 0.10);
+    --surface-border: rgba(255, 255, 255, 0.55);
+    --surface-solid: #000000;
+    --secondary-color: #FFB37A;
+    --focus-ring: #FFFFFF;
+    --on-ember: #000000;
+    --on-ember-80: rgba(0, 0, 0, 0.82);
+    --on-ember-90: rgba(0, 0, 0, 0.9);
+    --on-ember-30: rgba(0, 0, 0, 0.35);
+    --on-accent: #000000;
+
+    --color-white: #FFFFFF;
+    --color-gray-100: #FFFFFF;
+    --color-gray-200: #F1F5F9;
+    --color-gray-300: #E2E8F0;
+    --color-gray-400: #E2E8F0;
+    --color-gray-500: #CBD5E1;
+
+    --green-indicator: #6EE7B7;
+    --amber-indicator: #FDE68A;
+    --red-indicator: #FCA5A5;
+    --blue-indicator: #93C5FD;
+    --cyan-indicator: #67E8F9;
+    --yellow-indicator: #FDE047;
+    --orange-indicator: #FDBA74;
+    --info-indicator: #E2E8F0;
+
+    --sensor-gas: #93C5FD;
+    --sensor-temp: #FDBA74;
+    --sensor-power: #FDE047;
+    --sensor-humidity: #67E8F9;
+    --signal-nominal: #6EE7B7;
+    --signal-warning: #FDE68A;
+    --signal-critical: #FCA5A5;
+    --chart-axis: #E2E8F0;
+    --chart-grid: rgba(255, 255, 255, 0.24);
+    --chart-grid-strong: rgba(255, 255, 255, 0.55);
+    --chart-crosshair: rgba(255, 255, 255, 0.7);
+    --chart-dot-ring: #000000;
+}
+
+html.a11y-high-contrast body {
+    background-image: none;
+}
+
+html.a11y-high-contrast.light {
+    --primary-text-color: #000000;
+    --gray-text-color: #1E293B;
+    --bg-color: #FFFFFF;
+    --surface-color: #FFFFFF;
+    --surface-border: #000000;
+    --surface-solid: #FFFFFF;
+    --secondary-color: #9A3412;
+    --focus-ring: #000000;
+    --on-ember: #000000;
+    --on-accent: #FFFFFF;
+
+    --color-white: #000000;
+    --color-gray-100: #000000;
+    --color-gray-200: #0F172A;
+    --color-gray-300: #1E293B;
+    --color-gray-400: #1E293B;
+    --color-gray-500: #334155;
+
+    --green-indicator: #065F46;
+    --amber-indicator: #78350F;
+    --red-indicator: #991B1B;
+    --blue-indicator: #1E3A8A;
+    --cyan-indicator: #155E75;
+    --yellow-indicator: #713F12;
+    --orange-indicator: #9A3412;
+    --info-indicator: #334155;
+
+    --sensor-gas: #1E3A8A;
+    --sensor-temp: #9A3412;
+    --sensor-power: #713F12;
+    --sensor-humidity: #155E75;
+    --signal-nominal: #065F46;
+    --signal-warning: #78350F;
+    --signal-critical: #991B1B;
+    --chart-axis: #1E293B;
+    --chart-grid: rgba(0, 0, 0, 0.24);
+    --chart-grid-strong: rgba(0, 0, 0, 0.55);
+    --chart-crosshair: rgba(0, 0, 0, 0.7);
+    --chart-dot-ring: #FFFFFF;
+}
+
+/* Light high contrast keeps white text on dark overlays. */
+html.a11y-high-contrast.light :is(.bg-black\/30, .bg-black\/40, .bg-black\/50) {
+    --color-white: #ffffff;
+    color: #ffffff;
+}
+
+/* ---------- Accessibility: text size ---------- */
+
+/* Root scaling grows rem-based text and spacing together. */
+html.a11y-text-lg {
+    font-size: 112.5%;
+}
+
+/* ---------- Accessibility: reduced motion ---------- */
+
+html.a11y-reduce-motion *,
+html.a11y-reduce-motion *::before,
+html.a11y-reduce-motion *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+}
+
+html.a11y-reduce-motion .dot-ping,
+html.a11y-reduce-motion .skeleton-shine::after {
+    animation: none !important;
+}
+
+/* ---------- Accessibility: focus ---------- */
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+html.a11y-focus-strong :focus-visible {
+    outline: 3px solid var(--focus-ring) !important;
+    outline-offset: 3px !important;
+    box-shadow: 0 0 0 2px var(--bg-color);
+}
+
+html.a11y-high-contrast :focus-visible {
+    outline: 3px solid var(--focus-ring) !important;
+    outline-offset: 3px !important;
+}
+
+/* Respect the OS forced-colors palette for boundaries and focus. */
+@media (forced-colors: active) {
+    .panel-card,
+    .input-profile,
+    .btn-outline,
+    .btn-ghost,
+    .btn-icon {
+        border: 1px solid CanvasText;
+    }
+
+    :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+        outline: 2px solid Highlight !important;
+    }
+}

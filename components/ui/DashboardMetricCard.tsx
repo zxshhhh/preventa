@@ -184,7 +184,7 @@ export default function DashboardMetricCard({
         <div className="flex items-center gap-3 min-w-0">
           <span
             className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
-            style={{ backgroundColor: color + '1A' }}
+            style={{ backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)` }}
           >
             <span style={{ color }}>{icon}</span>
           </span>
@@ -234,17 +234,17 @@ export default function DashboardMetricCard({
             <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto block select-none">
               <path
                 d={`M ${M.left} 66 C 78 34, 110 88, 150 64 C 186 44, 214 92, 250 66 C 272 52, 292 62, ${W - M.right} 50 L ${W - M.right} ${xAxisY} L ${M.left} ${xAxisY} Z`}
-                fill="rgba(148,163,184,0.10)"
+                fill="var(--chart-grid)"
               />
               <path
                 d={`M ${M.left} 66 C 78 34, 110 88, 150 64 C 186 44, 214 92, 250 66 C 272 52, 292 62, ${W - M.right} 50`}
                 fill="none"
-                stroke="rgba(148,163,184,0.35)"
+                stroke="var(--chart-grid-strong)"
                 strokeWidth="2.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
-              <line x1={M.left} x2={W - M.right} y1={xAxisY} y2={xAxisY} stroke="rgba(148,163,184,0.25)" strokeWidth="1" />
+              <line x1={M.left} x2={W - M.right} y1={xAxisY} y2={xAxisY} stroke="var(--chart-grid-strong)" strokeWidth="1" />
               {[0, 0.5, 1].map((f) => (
                 <rect
                   key={f}
@@ -253,7 +253,7 @@ export default function DashboardMetricCard({
                   width="44"
                   height="7"
                   rx="3.5"
-                  fill="rgba(148,163,184,0.18)"
+                  fill="var(--chart-grid-strong)"
                 />
               ))}
             </svg>
@@ -262,7 +262,7 @@ export default function DashboardMetricCard({
           <svg
             ref={svgRef}
             viewBox={`0 0 ${W} ${H}`}
-            className="w-full h-auto block select-none touch-none rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--secondary-color)/60"
+            className="w-full h-auto block select-none touch-none rounded-lg focus-visible:ring-2 focus-visible:ring-(--focus-ring)"
             role="img"
             aria-label={`${title} trend, ${chartPoints.length} readings. Use the left and right arrow keys to inspect each reading.`}
             tabIndex={0}
@@ -288,7 +288,7 @@ export default function DashboardMetricCard({
                 x2={geom.xAt(chartPoints.length - 1)}
                 y1={geom.yAt(t)}
                 y2={geom.yAt(t)}
-                stroke="rgba(148,163,184,0.10)"
+                stroke="var(--chart-grid)"
                 strokeWidth="1"
               />
             ))}
@@ -297,7 +297,7 @@ export default function DashboardMetricCard({
               x2={geom.xAt(chartPoints.length - 1)}
               y1={xAxisY}
               y2={xAxisY}
-              stroke="rgba(148,163,184,0.22)"
+              stroke="var(--chart-grid-strong)"
               strokeWidth="1"
             />
             {gridTicks.map((t) => (
@@ -308,7 +308,7 @@ export default function DashboardMetricCard({
                 textAnchor="end"
                 dominantBaseline="central"
                 fontSize="8"
-                fill="#64748B"
+                fill="var(--chart-axis)"
               >
                 {fmt(t)}
               </text>
@@ -320,7 +320,7 @@ export default function DashboardMetricCard({
                 y={xAxisY + 10}
                 textAnchor={labelAnchor(i)}
                 fontSize="8"
-                fill="#64748B"
+                fill="var(--chart-axis)"
               >
                 {chartPoints[i].label}
               </text>
@@ -333,7 +333,7 @@ export default function DashboardMetricCard({
               <g>
                 {pulse && <circle className="dot-ping" cx={lastX} cy={lastY} r="4" fill={color} />}
                 <circle cx={lastX} cy={lastY} r="8" fill={color} opacity="0.18" />
-                <circle cx={lastX} cy={lastY} r="3.5" fill={color} stroke="#fff" strokeWidth="2" />
+                <circle cx={lastX} cy={lastY} r="3.5" fill={color} stroke="var(--chart-dot-ring)" strokeWidth="2" />
               </g>
             )}
           </svg>

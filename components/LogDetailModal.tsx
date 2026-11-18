@@ -1,7 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import Image from 'next/image'
 import { lockScroll } from '@/lib/scrollLock'
+import { useFocusTrap } from '@/lib/useFocusTrap'
 import type {
   LogEntry,
   CaptureEntry,
@@ -28,9 +30,6 @@ interface Props {
 
 type LoadState = 'loading' | 'ready' | 'missing' | 'error'
 
-const FOCUSABLE =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
 function DetailItem({
   label,
   value,
@@ -47,7 +46,7 @@ function DetailItem({
       </dt>
       <dd
         className={
-          'mt-1 break-words text-sm font-semibold text-gray-100 ' +
+          'mt-1 wrap-break-words text-sm font-semibold text-gray-100 ' +
           (numeric ? 'tnum' : '')
         }
       >
@@ -249,11 +248,14 @@ function CaptureImage({
         )}
 
         {state === 'ready' && imageUrl && (
-          <img
+          <Image
             src={imageUrl}
             alt={`Camera snapshot near the event at ${time} — ${classification}${confidence}`}
+            fill
+            unoptimized
             loading={index === 0 ? 'eager' : 'lazy'}
             decoding="async"
+            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
             className="h-full w-full object-cover"
           />
         )}
@@ -283,24 +285,25 @@ function EventEvidence({
   useEffect(() => {
     let cancelled = false
 
-    setCaptures([])
-    setReading(null)
-    setCaptureState('loading')
-    setReadingState('loading')
+    // Deferred into an async function so the reset setState calls aren't synchronous in the effect body.
+    const load = async () => {
+      setCaptures([])
+      setReading(null)
+      setCaptureState('loading')
+      setReadingState('loading')
 
-    if (!deviceCode) {
-      if (deviceState === 'error') {
-        setCaptureState('error')
-        setReadingState('error')
-      } else if (deviceState === 'missing') {
-        setCaptureState('missing')
-        setReadingState('missing')
+      if (!deviceCode) {
+        if (deviceState === 'error') {
+          setCaptureState('error')
+          setReadingState('error')
+        } else if (deviceState === 'missing') {
+          setCaptureState('missing')
+          setReadingState('missing')
+        }
+
+        return
       }
 
-      return
-    }
-
-    const load = async () => {
       const [readingResult, captureResult] = await Promise.allSettled([
         fetchEventReadings(deviceCode, log.timestamp, log.endTime),
         fetchCaptures(deviceCode),
@@ -399,22 +402,24 @@ export default function LogDetailModal({ log, onClose }: Props) {
   const [deviceState, setDeviceState] = useState<LoadState>('loading')
 
   const panelRef = useRef<HTMLDivElement>(null)
-  const closeRef = useRef<HTMLButtonElement>(null)
+
+  useFocusTrap(panelRef, true, onClose)
 
   useEffect(() => lockScroll(), [])
 
   useEffect(() => {
     let cancelled = false
 
-    setDeviceCode(null)
-    setDeviceState('loading')
+    // Deferred into an async function so the reset setState calls aren't synchronous in the effect body.
+    const load = async () => {
+      setDeviceCode(null)
+      setDeviceState('loading')
 
-    if (!log.deviceId) {
-      setDeviceState('missing')
-      return
-    }
+      if (!log.deviceId) {
+        setDeviceState('missing')
+        return
+      }
 
-    void (async () => {
       try {
         const code = await fetchDeviceCode(log.deviceId as number)
 
@@ -427,47 +432,14 @@ export default function LogDetailModal({ log, onClose }: Props) {
           setDeviceState('error')
         }
       }
-    })()
+    }
+
+    void load()
 
     return () => {
       cancelled = true
     }
   }, [log.deviceId])
-
-  useEffect(() => {
-    const previouslyFocused = document.activeElement as HTMLElement | null
-    const panel = panelRef.current
-
-    closeRef.current?.focus()
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab' || !panel) return
-
-      const focusables = Array.from(
-        panel.querySelectorAll<HTMLElement>(FOCUSABLE),
-      ).filter((el) => el.offsetParent !== null || el === document.activeElement)
-
-      if (focusables.length === 0) return
-
-      const first = focusables[0]
-      const last = focusables[focusables.length - 1]
-
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
-
-    panel?.addEventListener('keydown', onKeyDown)
-
-    return () => {
-      panel?.removeEventListener('keydown', onKeyDown)
-      previouslyFocused?.focus()
-    }
-  }, [])
 
   const tier = log.peakTier ?? 0
   const tierLabel =
@@ -496,9 +468,9 @@ export default function LogDetailModal({ log, onClose }: Props) {
         aria-labelledby="event-detail-title"
         aria-describedby="event-detail-meta"
         tabIndex={-1}
-        className="relative z-10 flex max-h-[85dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-(--surface-solid) shadow-2xl outline-none lg:max-h-[80vh] lg:w-190 lg:max-w-4xl lg:rounded-2xl"
+        className="relative z-10 flex max-h-[85dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-(--surface-solid) shadow-2xl lg:max-h-[80vh] lg:w-190 lg:max-w-4xl lg:rounded-2xl"
       >
-        <header className="bg-ember shrink-0 px-5 py-4 text-(--bg-color)">
+        <header className="bg-ember ember-grid shrink-0 px-5 py-4 text-(--on-ember)">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <SeverityBadge tier={tier} label={tierLabel} />
@@ -510,7 +482,7 @@ export default function LogDetailModal({ log, onClose }: Props) {
               </h2>
               <p
                 id="event-detail-meta"
-                className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-semibold text-black/75"
+                className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-semibold text-(--on-ember-80)"
               >
                 <span className="tnum">{formatTime(log.timestamp)}</span>
                 {deviceCode && (
@@ -522,12 +494,11 @@ export default function LogDetailModal({ log, onClose }: Props) {
             </div>
 
             <button
-              ref={closeRef}
               onClick={onClose}
               className="btn-icon-light flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-black/30 text-xl leading-none text-white hover:bg-black/40 focus-visible:ring-2 focus-visible:ring-white"
               aria-label="Close event details"
             >
-              &times;
+              <span aria-hidden="true">&times;</span>
             </button>
           </div>
         </header>

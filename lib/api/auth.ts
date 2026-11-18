@@ -1,4 +1,4 @@
-import { apiPost, getToken, setToken, getRefreshToken, setRefreshToken } from './client'
+import { apiPost, getToken, setToken, getRefreshToken, setRefreshToken, signalAuthExpired } from './client'
 import { ENDPOINTS } from './endpoints'
 export interface AuthUser {
   username: string
@@ -96,6 +96,7 @@ export async function refreshAccessToken(): Promise<string | null> {
   }
   setToken(null)
   setRefreshToken(null)
+  signalAuthExpired()
   return null
 }
 
