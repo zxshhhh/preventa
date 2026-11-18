@@ -7,7 +7,7 @@ import { fetchEvents } from '@/lib/api/events'
 import { fetchLatestSeries, fetchRangeRaw } from '@/lib/api/telemetry'
 import { connectLiveTelemetry, type SensorPoint, type FusionData } from '@/lib/api/realtime'
 import { refreshAccessToken } from '@/lib/api/auth'
-import { onForegroundPush, getStoredPushToken, isPushConfigured, type PushAlert } from '@/lib/api/push'
+import { isPushConfigured, onForegroundPush } from '@/lib/api/push'
 
 export type EventLevel = 'WARNING' | 'CRITICAL'
 export type ToastLevel = EventLevel | 'SUCCESS'
@@ -303,7 +303,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
     let unsubscribe: (() => void) | null = null
 
     void (async () => {
-      if (!isPushConfigured() || !getStoredPushToken()) return
+      if (!isPushConfigured()) return
       unsubscribe = await onForegroundPush((alert: PushAlert) => {
         if (cancelled) return
         setToasts((prev) =>

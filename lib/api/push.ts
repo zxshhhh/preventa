@@ -226,7 +226,8 @@ export async function onForegroundPush(handler: (alert: PushAlert) => void): Pro
       const data = (payload.data ?? {}) as Record<string, string>
       // Backend contract: fire-event pushes carry type === 'preventa_fire_event';
       // ignore anything else (missing type is tolerated defensively).
-      if (data.type && data.type !== 'preventa_fire_event') return
+      if (data.type && data.type !== 'preventa_fire_event' &&
+  data.type !== 'preventa_test_alert') return
       const tier = Number(data.peak_tier ?? data.tier ?? 0)
       handler({
         eventId: data.event_id ?? null,
