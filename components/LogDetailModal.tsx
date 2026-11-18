@@ -87,7 +87,7 @@ function SectionHeading({ title, meta }: { title: string; meta?: string }) {
 const READING_FIELDS = [
   { label: 'GAS', unit: 'PPM', keys: ['smooth_ppm', 'gas', 'ppm', 'mq7'] },
   {
-    label: 'TEMPERATURE',
+    label: 'TEMP',
     unit: '°C',
     keys: ['smooth_temperature', 'temperature', 'temp'],
   },
