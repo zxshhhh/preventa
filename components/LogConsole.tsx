@@ -171,7 +171,7 @@ export default function LogConsole() {
         <div className="flex flex-wrap items-center gap-2 mb-5">
           {devices.length > 0 && (
             <>
-              <span className="text-[10px] font-extrabold text-gray-400 tracking-widest">DEVICE</span>
+              <span className="text-[10px] font-extrabold text-gray-400 tracking-widest">DEVICE:</span>
               <FilterChip active={selected === null} onClick={() => setSelectedId(null)}>
                 ALL
               </FilterChip>
@@ -182,7 +182,7 @@ export default function LogConsole() {
               ))}
             </>
           )}
-          <span className="text-[10px] font-extrabold text-gray-400 tracking-widest ml-1">STATUS</span>
+          <span className="text-[10px] font-extrabold text-gray-400 tracking-widest ml-1">STATUS:</span>
           {STATUS_CHIPS.map(({ value, label }) => (
             <FilterChip key={value} active={statusFilter === value} onClick={() => setStatusFilter(value)}>
               {label}

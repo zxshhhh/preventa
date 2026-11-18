@@ -164,7 +164,7 @@ export default function LogDetailModal({
             <InfoItem label="STATUS" value={log.eventStatus ?? '—'} />
           </div>
           <div>
-            <h3 className="text-[10px] font-extrabold text-gray-400 tracking-wide mb-2">ESPCAM32 SNAPSHOT</h3>
+            <h3 className="text-[10px] font-extrabold text-gray-400 tracking-wide mb-2">SNAPSHOT</h3>
             <EsplCamSnapshot
               log={log}
               captureDeviceId={captureDeviceId}
