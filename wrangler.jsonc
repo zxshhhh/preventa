@@ -18,5 +18,11 @@
   "cache": {"enabled":false},
   "vars": {
     "NEXT_PUBLIC_API_URL": "https://preventa.duckdns.org"
+  },
+  "observability": {
+    "logs": {
+      "enabled": false,
+      "invocation_logs": true
+    }
   }
 }
