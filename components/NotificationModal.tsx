@@ -73,7 +73,7 @@ export default function NotificationModal({ show, onClose }: Props) {
   })
 
   const renderBody = () => (
-    <div className="overflow-y-auto flex-1">
+    <div className="overflow-y-auto flex-1 min-h-0 overscroll-contain">
       {activeCrossings.length > 0 && (
         <div className="p-3 border-b border-white/10">
           <p className="text-[10px] font-extrabold tracking-wide text-gray-500 mb-2">LIVE</p>
