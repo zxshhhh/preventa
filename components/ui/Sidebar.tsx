@@ -6,6 +6,7 @@ import { useSidebar } from '@/context/useSidebar'
 import { useSensors } from '@/context/useSensors'
 import { useHydrated } from '@/lib/useHydrated'
 import { logout } from '@/lib/api/auth'
+import UserAvatar from '@/components/ui/UserAvatar'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
@@ -99,7 +100,7 @@ export default function Sidebar() {
             {badge}
           </button>
           <Link href="/profile" title="Profile" className="shrink-0">
-            <Image src="/Profile-sample.png" loading="eager" alt="profile" width={40} height={40} className="rounded-full bg-white/10 w-8 h-8 cursor-pointer" />
+            <UserAvatar size="sm" className="cursor-pointer" />
           </Link>
         </div>
       </div>
@@ -189,7 +190,7 @@ export default function Sidebar() {
             title="Profile"
             className="flex justify-center py-1 rounded-xl cursor-pointer transition-colors hover:bg-white/5"
           >
-            <Image src="/Profile-sample.png" alt="profile" width={40} height={40} className="rounded-full bg-white/10 w-10 h-10 shrink-0" />
+            <UserAvatar />
           </Link>
           <button
             onClick={handleLogout}

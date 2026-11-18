@@ -1,11 +1,11 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import Image from 'next/image'
+import { useEffect, useState } from 'react'
 import { useSensors } from '@/context/useSensors'
 import { useDevices } from '@/context/useDevice'
 import { useHydrated } from '@/lib/useHydrated'
 import { isApiConfigured } from '@/lib/api/config'
+import { getUsername } from '@/lib/api/auth'
 import {
   activeRecipient,
   createContact,
@@ -16,22 +16,12 @@ import {
   fetchResidences,
   isValidRecipient,
   sortContacts,
-  saveProfile,
   updateContact,
   updateResidence,
   type ProfileContact,
   type ResidenceEntry,
 } from '@/lib/api/profile'
-
-const DEFAULT_AVATAR = '/Profile-sample.png'
-
-const INITIAL_FORM = {
-  firstName: 'June Joshua',
-  lastName: 'Rabadon',
-  email: 'june.rabadon@preventa.io',
-  contact: '(+63) 915 5123 867',
-  address: 'Zone A, Warehouse District, General Santos City',
-}
+import UserAvatar from '@/components/ui/UserAvatar'
 
 interface ContactDraft {
   name: string
@@ -44,8 +34,6 @@ const EMPTY_DRAFT: ContactDraft = { name: '', phone: '', priority: 1 }
 export default function ProfileContent() {
   const { pushToast } = useSensors()
   const hydrated = useHydrated()
-  const [form, setForm] = useState(INITIAL_FORM)
-  const [avatarSrc, setAvatarSrc] = useState(DEFAULT_AVATAR)
   const [contacts, setContacts] = useState<ProfileContact[]>([
     { id: 1, name: 'User TM', phone: '(+63) 915 5123 867', priority: 1 },
   ])
@@ -54,7 +42,6 @@ export default function ProfileContent() {
   const [editingId, setEditingId] = useState<ProfileContact['id'] | null>(null)
   const [editDraft, setEditDraft] = useState<ContactDraft>(EMPTY_DRAFT)
   const [confirmDeleteId, setConfirmDeleteId] = useState<ProfileContact['id'] | null>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!hydrated || !isApiConfigured()) return
@@ -62,54 +49,20 @@ export default function ProfileContent() {
     void fetchProfile()
       .then((profile) => {
         if (cancelled || !profile) return
-        setForm({
-          firstName: profile.firstName || INITIAL_FORM.firstName,
-          lastName: profile.lastName || INITIAL_FORM.lastName,
-          email: profile.email || INITIAL_FORM.email,
-          contact: profile.contact || INITIAL_FORM.contact,
-          address: profile.address || INITIAL_FORM.address,
-        })
         if (profile.contacts?.length) {
           setContacts(profile.contacts.map((c) => ({ id: c.id, name: c.name, phone: c.phone, priority: c.priority })))
         }
       })
       .catch(() => {
-        /* keep the local default profile if the fetch fails */
+        /* keep the local default contacts if the fetch fails */
       })
     return () => {
       cancelled = true
     }
   }, [hydrated])
 
-  const displayName = [form.firstName, form.lastName].filter(Boolean).join(' ').trim().toUpperCase()
-
-  const set = (key: keyof typeof INITIAL_FORM) => (value: string) =>
-    setForm((f) => ({ ...f, [key]: value }))
-
-  const applyChanges = () => {
-    if (!isApiConfigured()) {
-      pushToast('Changes saved', 'Your profile has been updated.')
-      return
-    }
-    void saveProfile({
-      firstName: form.firstName,
-      lastName: form.lastName,
-      email: form.email,
-      contact: form.contact,
-      address: form.address,
-    })
-      .then(() => pushToast('Changes saved', 'Your profile has been synced to the server.'))
-      .catch(() => pushToast('Save failed', 'Could not reach the API — changes kept locally.'))
-  }
-
-  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = () => setAvatarSrc(reader.result as string)
-    reader.readAsDataURL(file)
-    e.target.value = ''
-  }
+  const username = hydrated ? getUsername() : null
+  const displayName = username ? username.toUpperCase() : hydrated ? 'USER' : ''
 
   const addContact = () => {
     const name = addDraft.name.trim() || 'New Contact'
@@ -181,63 +134,10 @@ export default function ProfileContent() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="font-bold text-2xl">Profile</h1>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={applyChanges}
-            className="btn-primary btn-md"
-          >
-            APPLY CHANGES
-          </button>
-        </div>
-      </div>
+      <h1 className="font-bold text-2xl">Profile</h1>
       <div className="flex flex-col items-center">
-        <div className="relative group">
-          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
-          <Image
-            src={avatarSrc}
-            loading="eager"
-            alt="profile"
-            width={500}
-            height={500}
-            className="w-35 h-35 md:w-40 md:h-40 rounded-full bg-ember object-cover"
-          />
-          <button
-            onClick={() => fileRef.current?.click()}
-            aria-label="Change photo"
-            className="absolute inset-0 flex items-center justify-center rounded-full bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-              <circle cx="12" cy="13" r="4" />
-            </svg>
-          </button>
-        </div>
-        {avatarSrc !== DEFAULT_AVATAR && (
-          <button
-            onClick={() => setAvatarSrc(DEFAULT_AVATAR)}
-            className="btn-ghost btn-sm mt-2"
-          >
-            REVERT PHOTO
-          </button>
-        )}
-        <h2 className="text-center text-xl font-bold mt-3">{displayName || 'N/A'}</h2>
-      </div>
-      <div className="panel-card p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="font-bold text-base text-gray-100">Personal Information</h2>
-          <span className="text-xs font-bold text-gray-400">{form.email}</span>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Field label="FIRST NAME" value={form.firstName} onChange={set('firstName')} />
-          <Field label="LAST NAME" value={form.lastName} onChange={set('lastName')} />
-          <Field label="EMAIL" type="email" value={form.email} onChange={set('email')} />
-          <Field label="CONTACT #" value={form.contact} onChange={set('contact')} />
-          <div className="sm:col-span-2">
-            <Field label="ADDRESS" value={form.address} onChange={set('address')} />
-          </div>
-        </div>
+        <UserAvatar size="lg" />
+        <h2 className="text-center text-xl font-bold mt-3">{displayName}</h2>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <div className="panel-card p-5">
@@ -363,27 +263,6 @@ export default function ProfileContent() {
         </div>
       </div>
       <ResidencesSection />
-    </div>
-  )
-}
-
-interface FieldProps {
-  label: string
-  value: string
-  onChange: (value: string) => void
-  type?: string
-}
-
-function Field({ label, value, onChange, type = 'text' }: FieldProps) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-bold text-gray-400 tracking-wide">{label}</label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-10 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-(--secondary-color)/40 focus:border-(--secondary-color) transition-all"
-      />
     </div>
   )
 }

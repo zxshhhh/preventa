@@ -106,22 +106,6 @@ export async function fetchProfile(): Promise<ProfileData | null> {
   }
 }
 
-export async function saveProfile(profile: Omit<ProfileData, 'contacts'>): Promise<ProfileData | null> {
-  try {
-    const residences = await apiGet<PaginatedResidences>(ENDPOINTS.residences)
-    const first = residences?.results?.[0]
-    if (!first) return null
-
-    const data = await apiPatch<Residence>(ENDPOINTS.residence(first.id), { address: profile.address })
-    if (data) {
-      return { ...profile, address: data.address, contacts: [] }
-    }
-    return null
-  } catch {
-    return null
-  }
-}
-
 export async function createContact(contact: Omit<ProfileContact, 'id'>): Promise<ProfileContact> {
   const residences = await apiGet<PaginatedResidences>(ENDPOINTS.residences)
   const first = residences?.results?.[0]
