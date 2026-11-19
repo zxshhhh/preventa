@@ -6,6 +6,7 @@ import type {
 
 import { apiGet, apiBlob } from './client'
 import { ENDPOINTS } from './endpoints'
+import { EVENT_LOOKBACK_MS, EVENT_RECOVERY_MS } from '@/lib/eventEvidence'
 
 export type EventStatusFilter = 'active' | 'resolved' | 'false_alarm'
 
@@ -73,14 +74,6 @@ interface RawReading {
   time?: string
   [key: string]: unknown
 }
-
-/**
- * How far before an event to request sensor readings.
- *
- * The backend saves the triggering reading just before creating
- * the corresponding event.
- */
-const READING_LOOKBACK_SECONDS = 5
 
 /**
  * Captures slightly before and after the event window are included
@@ -297,8 +290,8 @@ export async function fetchDeviceCode(
 /**
  * Loads readings for a specific device and event time window.
  *
- * The start is moved backwards by five seconds to include
- * the reading that triggered event creation.
+ * Include two minutes before the trigger and one minute after resolution.
+ * Active events end at the current time.
  */
 export async function fetchEventReadings(
   deviceCode: string,
@@ -311,15 +304,14 @@ export async function fetchEventReadings(
     throw new Error('Invalid event start timestamp.')
   }
 
-  startDate.setSeconds(
-    startDate.getSeconds() - READING_LOOKBACK_SECONDS,
-  )
+  startDate.setTime(startDate.getTime() - EVENT_LOOKBACK_MS)
 
   const endDate = eventEnd ? new Date(eventEnd) : new Date()
 
   if (Number.isNaN(endDate.getTime())) {
     throw new Error('Invalid event end timestamp.')
   }
+  if (eventEnd) endDate.setTime(Math.min(Date.now(), endDate.getTime() + EVENT_RECOVERY_MS))
 
   const params = new URLSearchParams({
     device_id: deviceCode,

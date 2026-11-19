@@ -20,8 +20,11 @@ import {
   findCapturesNearEvent,
   findEventReading,
   fetchCaptureImage,
+  fetchLogs,
 } from '@/lib/api/reports'
 import { formatNumber } from '@/lib/dashboardData'
+import EventTimeline from '@/components/EventTimeline'
+import { EVENT_RECOVERY_MS, findTriggerReading, sortEventReadings } from '@/lib/eventEvidence'
 
 interface Props {
   log: LogEntry
@@ -91,6 +94,7 @@ const READING_FIELDS = [
     keys: ['smooth_temperature', 'temperature', 'temp'],
   },
   { label: 'HUMIDITY', unit: '%', keys: ['smooth_humidity', 'humidity'] },
+  { label: 'CURRENT', unit: 'A', keys: ['smooth_current'] },
 ] as const
 
 function readingValue(
@@ -127,7 +131,7 @@ function EventReadingCard({ reading }: { reading: ReadingEntry }) {
         <p className="text-xs text-gray-400">Closest to event start</p>
       </div>
 
-      <dl className="grid grid-cols-3 gap-2 sm:gap-3">
+      <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
         {READING_FIELDS.map((field) => (
           <div key={field.label} className="min-w-0 rounded-lg bg-black/20 p-3">
             <dt className="text-xs font-semibold uppercase tracking-wide text-gray-400">
@@ -228,8 +232,8 @@ function CaptureImage({
   const time = formatTime(capture.timestamp)
   const classification = capture.classification || 'Unclassified'
   const confidence =
-    capture.confidence !== null
-      ? `, ${(capture.confidence * 100).toFixed(1)}% confidence`
+    capture.confidence !== null && Number.isFinite(Number(capture.confidence))
+      ? ` · ${Number(capture.confidence).toFixed(1)}% fire confidence`
       : ''
 
   return (
@@ -263,6 +267,7 @@ function CaptureImage({
 
       <figcaption className="p-3 backdrop-blur-lg bg-transparent text-center">
         <p className="tnum text-xs text-gray-300">{time}</p>
+        <p className="mt-1 text-xs text-gray-300">{classification}{confidence}</p>
       </figcaption>
     </figure>
   )
@@ -272,26 +277,30 @@ function EventEvidence({
   log,
   deviceCode,
   deviceState,
+  onEventUpdate,
 }: {
   log: LogEntry
   deviceCode: string | null
   deviceState: LoadState
+  onEventUpdate: (event: LogEntry) => void
 }) {
   const [captures, setCaptures] = useState<CaptureEntry[]>([])
   const [reading, setReading] = useState<ReadingEntry | null>(null)
+  const [readings, setReadings] = useState<ReadingEntry[]>([])
+  const [refreshError, setRefreshError] = useState(false)
   const [captureState, setCaptureState] = useState<LoadState>('loading')
   const [readingState, setReadingState] = useState<LoadState>('loading')
 
   useEffect(() => {
     let cancelled = false
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined
+    let currentEvent = log
+    let loadedReadings = false
+    let loadedCaptures = false
 
     // Deferred into an async function so the reset setState calls aren't synchronous in the effect body.
-    const load = async () => {
-      setCaptures([])
-      setReading(null)
-      setCaptureState('loading')
-      setReadingState('loading')
-
+    const load = async (refresh = false) => {
+      let eventRefreshFailed = false
       if (!deviceCode) {
         if (deviceState === 'error') {
           setCaptureState('error')
@@ -304,31 +313,58 @@ function EventEvidence({
         return
       }
 
+      if (refresh && currentEvent.eventStatus === 'active') {
+        try {
+          const events = await fetchLogs({ deviceId: deviceCode })
+          const updated = events.find((event) => event.eventId === log.eventId)
+          if (cancelled) return
+          if (updated) {
+            const changed = updated.eventStatus !== currentEvent.eventStatus ||
+              updated.peakTier !== currentEvent.peakTier || updated.endTime !== currentEvent.endTime ||
+              updated.peakFireType !== currentEvent.peakFireType
+            currentEvent = updated
+            if (changed) onEventUpdate(updated)
+          }
+        } catch {
+          eventRefreshFailed = true
+        }
+      }
+      if (cancelled) return
       const [readingResult, captureResult] = await Promise.allSettled([
-        fetchEventReadings(deviceCode, log.timestamp, log.endTime),
+        fetchEventReadings(deviceCode, currentEvent.timestamp, currentEvent.endTime),
         fetchCaptures(deviceCode),
       ])
 
       if (cancelled) return
 
       if (readingResult.status === 'fulfilled') {
-        const closest = findEventReading(readingResult.value, log.timestamp)
+        const ordered = sortEventReadings(readingResult.value)
+        const closest = findTriggerReading(ordered, currentEvent.timestamp) ?? findEventReading(ordered, currentEvent.timestamp)
+        setReadings(ordered)
         setReading(closest)
         setReadingState(closest ? 'ready' : 'missing')
+        loadedReadings = true
       } else {
-        setReadingState('error')
+        if (!loadedReadings) setReadingState('error')
       }
 
       if (captureResult.status === 'fulfilled') {
         const nearby = findCapturesNearEvent(
           captureResult.value,
-          log.timestamp,
-          log.endTime,
+          currentEvent.timestamp,
+          currentEvent.endTime,
         )
         setCaptures(nearby)
         setCaptureState(nearby.length > 0 ? 'ready' : 'missing')
+        loadedCaptures = true
       } else {
-        setCaptureState('error')
+        if (!loadedCaptures) setCaptureState('error')
+      }
+
+      if (refresh) setRefreshError(eventRefreshFailed || readingResult.status === 'rejected' || captureResult.status === 'rejected')
+      if (currentEvent.eventStatus === 'active' ||
+          (currentEvent.endTime && Date.now() < Date.parse(currentEvent.endTime) + EVENT_RECOVERY_MS)) {
+        refreshTimer = setTimeout(() => { void load(true) }, 10_000)
       }
     }
 
@@ -336,13 +372,15 @@ function EventEvidence({
 
     return () => {
       cancelled = true
+      clearTimeout(refreshTimer)
     }
-  }, [deviceCode, deviceState, log.timestamp, log.endTime])
+  }, [deviceCode, deviceState, log.timestamp, log.endTime, log.eventStatus, log.eventId, onEventUpdate, log])
 
   return (
     <>
       <section className="mt-6">
-        <SectionHeading title="Sensor reading" />
+        <SectionHeading title="Why the device alerted" meta={log.eventStatus === 'active' ? 'Refreshing every 10 s' : undefined} />
+        {refreshError && <p role="status" className="mb-3 text-sm text-(--amber-indicator)">Refresh failed. The last loaded evidence remains visible.</p>}
         {readingState === 'loading' && <ReadingSkeleton />}
         {readingState === 'error' && (
           <p role="alert" className="text-sm text-(--red-indicator)">
@@ -355,7 +393,13 @@ function EventEvidence({
           </p>
         )}
         {readingState === 'ready' && reading && (
-          <EventReadingCard reading={reading} />
+          <>
+            <EventTimeline key={log.eventId ?? log.timestamp} readings={readings} captures={captures} log={log} />
+            <details className="mt-4">
+              <summary className="min-h-11 cursor-pointer text-sm font-semibold text-gray-300">Values nearest the event start</summary>
+              <EventReadingCard reading={reading} />
+            </details>
+          </>
         )}
       </section>
 
@@ -398,6 +442,9 @@ function EventEvidence({
 }
 
 export default function LogDetailModal({ log, onClose }: Props) {
+  const [refreshedEvent, setCurrentEvent] = useState<LogEntry | null>(null)
+  const currentEvent = refreshedEvent && refreshedEvent.eventId === log.eventId &&
+    refreshedEvent.timestamp === log.timestamp ? refreshedEvent : log
   const [deviceCode, setDeviceCode] = useState<string | null>(null)
   const [deviceState, setDeviceState] = useState<LoadState>('loading')
 
@@ -441,17 +488,9 @@ export default function LogDetailModal({ log, onClose }: Props) {
     }
   }, [log.deviceId])
 
-  const tier = log.peakTier ?? 0
+  const tier = currentEvent.peakTier ?? 0
   const tierLabel =
-    tier >= 4
-      ? 'Severe'
-      : tier === 3
-        ? 'Warning'
-        : tier === 2
-          ? 'Mild'
-          : tier === 1
-            ? 'Normal'
-            : 'Unclassified'
+    ['Normal', 'Advisory', 'Caution', 'Warning', 'Danger', 'Emergency'][tier] ?? 'Unclassified'
 
   return (
     <div className="fixed inset-0 z-60 flex items-end justify-center lg:items-center">
@@ -509,18 +548,18 @@ export default function LogDetailModal({ log, onClose }: Props) {
               label="Severity"
               value={tier > 0 ? `Tier ${tier} (${tierLabel})` : '—'}
             />
-            <DetailItem label="Fire type" value={log.peakFireType || '—'} />
+            <DetailItem label="Device fire classification" value={currentEvent.peakFireType || '—'} />
             <DetailItem
               label="Duration"
               value={
-                log.durationSeconds !== undefined &&
-                log.durationSeconds !== null
-                  ? `${log.durationSeconds}s`
+                currentEvent.durationSeconds !== undefined &&
+                currentEvent.durationSeconds !== null
+                  ? `${currentEvent.durationSeconds}s`
                   : '—'
               }
               numeric
             />
-            <DetailItem label="Status" value={log.eventStatus || '—'} />
+            <DetailItem label="Status" value={currentEvent.eventStatus || '—'} />
             <DetailItem
               label="Start time"
               value={formatTime(log.timestamp)}
@@ -529,16 +568,18 @@ export default function LogDetailModal({ log, onClose }: Props) {
             <DetailItem
               label="End time"
               value={
-                log.endTime ? formatTime(log.endTime) : 'Currently active'
+                currentEvent.endTime ? formatTime(currentEvent.endTime) : 'Currently active'
               }
               numeric
             />
           </dl>
 
           <EventEvidence
-            log={log}
+            key={currentEvent.eventId ?? currentEvent.timestamp}
+            log={currentEvent}
             deviceCode={deviceCode}
             deviceState={deviceState}
+            onEventUpdate={setCurrentEvent}
           />
         </div>
 
