@@ -1,4 +1,14 @@
-import { apiPost, getToken, setToken, getRefreshToken, setRefreshToken, signalAuthExpired } from './client'
+import {
+  apiPost,
+  ApiError,
+  clearSessionLocalData,
+  getToken,
+  setToken,
+  getRefreshToken,
+  setRefreshToken,
+  signalAuthExpired,
+} from './client'
+import { clearApiCache } from './cache'
 import { ENDPOINTS } from './endpoints'
 export interface AuthUser {
   username: string
@@ -78,12 +88,17 @@ export async function login(username: string, password: string): Promise<AuthUse
   setToken(data.access)
   setRefreshToken(data.refresh)
   setUsername(trimmed)
+  // A different account may have been signed in before — start with a clean cache.
+  clearApiCache()
+  clearSessionLocalData()
   return { username: trimmed }
 }
 
 export async function refreshAccessToken(): Promise<string | null> {
   const refresh = getRefreshToken()
   if (!refresh) return null
+  // Offline: keep the session and the saved data; retry after reconnect.
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return null
 
   try {
     const data = await apiPost<{ access: string }>(ENDPOINTS.refresh, { refresh }, { authenticated: false })
@@ -91,8 +106,9 @@ export async function refreshAccessToken(): Promise<string | null> {
       setToken(data.access)
       return data.access
     }
-  } catch {
-    /* refresh failed */
+  } catch (err) {
+    // A network failure is not an invalid token — don't wipe the cache/session.
+    if (err instanceof ApiError && err.status === 0) return null
   }
   setToken(null)
   setRefreshToken(null)
@@ -110,6 +126,8 @@ export function logout(): void {
   setToken(null)
   setRefreshToken(null)
   setUsername(null)
+  clearApiCache()
+  clearSessionLocalData()
 }
 
 export function hasToken(): boolean {

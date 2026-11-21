@@ -7,6 +7,7 @@ import { fetchLatestSeries, fetchRangeRaw } from '@/lib/api/telemetry'
 import { connectLiveTelemetry, type SensorPoint, type FusionData } from '@/lib/api/realtime'
 import { refreshAccessToken } from '@/lib/api/auth'
 import { isPushConfigured, onForegroundPush, parsePushAlert, type PushAlert } from '@/lib/api/push'
+import { useOnline } from '@/lib/useOnline'
 
 export type EventLevel = 'WARNING' | 'CRITICAL'
 export type ToastLevel = EventLevel | 'SUCCESS'
@@ -34,6 +35,8 @@ interface SensorsContextType {
   series: SensorSeries[]
   /** Fusion fields from the most recent live reading — used to react to tier transitions. */
   lastFusion: FusionData | null
+  /** Timestamp of the newest reading currently shown (live or restored from disk). */
+  liveSavedAt: number | null
   notifications: SensorEvent[]
   unreadCount: number
   markAllRead: () => void
@@ -45,12 +48,37 @@ interface SensorsContextType {
 
 // Bumped to drop legacy polled /events/ history — modal notifications are push-sourced.
 const STORAGE_KEY = 'preventa.notifications.v3'
+const LIVE_SNAPSHOT_KEY = 'preventa.live-snapshot.v1'
+const LIVE_SNAPSHOT_WRITE_MS = 5000
 const MAX_EVENTS = 50
 const MAX_TOASTS = 3
 const TOAST_LIFETIME_MS = 6000
 const BACKFILL_POLL_MS = 30_000
 
+interface LiveSnapshot {
+  savedAt: number
+  fusion: FusionData | null
+  points: Array<{ id: SensorId; point: SeriesPoint }>
+}
+
 const SensorsContext = createContext<SensorsContextType | undefined>(undefined)
+
+function loadLiveSnapshot(): LiveSnapshot | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(LIVE_SNAPSHOT_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as LiveSnapshot
+    if (!parsed || !Array.isArray(parsed.points) || !Number.isFinite(parsed.savedAt)) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function isOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false
+}
 
 function loadStoredEvents(): SensorEvent[] {
   if (typeof window === 'undefined') return []
@@ -112,12 +140,17 @@ function tryBrowserNotify(title: string, body: string) {
 export function SensorProvider({ children }: { children: ReactNode }) {
   const [series, setSeries] = useState<SensorSeries[]>([])
   const [lastFusion, setLastFusion] = useState<FusionData | null>(null)
+  const [liveSavedAt, setLiveSavedAt] = useState<number | null>(null)
   const [notifications, setNotifications] = useState<SensorEvent[]>(loadStoredEvents)
   const [toasts, setToasts] = useState<SensorToast[]>([])
 
   const seenEventsRef = useRef<Set<string>>(new Set(loadStoredEvents().map((e) => e.id)))
   const wsRef = useRef<WebSocket | null>(null)
   const wsReconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const reconnectRef = useRef<() => void>(() => {})
+  const lastSnapshotWriteRef = useRef(0)
+  const wasOfflineRef = useRef(false)
+  const online = useOnline()
   const buffersRef = useRef<Record<SensorId, SeriesPoint[]>>({
     mq7: [],
     dht22: [],
@@ -142,12 +175,57 @@ export function SensorProvider({ children }: { children: ReactNode }) {
     setSeries(out)
   }
 
+  /** Small, newest-reading snapshot that keeps the LIVE cards meaningful offline. */
+  function saveLiveSnapshot(points: SensorPoint, fusion: FusionData) {
+    const now = Date.now()
+    if (now - lastSnapshotWriteRef.current < LIVE_SNAPSHOT_WRITE_MS) return
+    lastSnapshotWriteRef.current = now
+
+    let savedAt = 0
+    for (const id of ['mq7', 'dht22', 'acs712', 'humidity'] as SensorId[]) {
+      const t = points[id].t
+      if (typeof t === 'number' && t > savedAt) savedAt = t
+    }
+    const snapshot: LiveSnapshot = {
+      savedAt: savedAt || now,
+      fusion,
+      points: (['mq7', 'dht22', 'acs712', 'humidity'] as SensorId[]).map((id) => ({ id, point: points[id] })),
+    }
+    try {
+      localStorage.setItem(LIVE_SNAPSHOT_KEY, JSON.stringify(snapshot))
+    } catch {
+      /* storage unavailable — live UI still works */
+    }
+    setLiveSavedAt(snapshot.savedAt)
+  }
+
+  // Restore the last live values before the socket/REST work starts. The one-hour
+  // seed below keeps any snapshot point newer than the seed's own tail.
+  useEffect(() => {
+    // Deferred to keep the first client render identical to the prerendered HTML.
+    const t = setTimeout(() => {
+      const snapshot = loadLiveSnapshot()
+      if (!snapshot) return
+      let changed = false
+      for (const { id, point } of snapshot.points) {
+        if (!buffersRef.current[id] || typeof point?.value !== 'number') continue
+        buffersRef.current[id] = [point]
+        changed = true
+      }
+      if (snapshot.fusion) setLastFusion(snapshot.fusion)
+      setLiveSavedAt(snapshot.savedAt)
+      if (changed) rebuildSeries()
+    }, 0)
+    return () => clearTimeout(t)
+  }, [])
+
   useEffect(() => {
     if (!isApiConfigured()) return
 
     let cancelled = false
 
     async function connectWS() {
+      if (isOffline()) return
       const token = localStorage.getItem('preventa.token')
       if (!token) return
 
@@ -160,10 +238,11 @@ export function SensorProvider({ children }: { children: ReactNode }) {
           pushPoint('acs712', points.acs712)
           pushPoint('humidity', points.humidity)
           setLastFusion(fusion)
+          saveLiveSnapshot(points, fusion)
           rebuildSeries()
         },
         (code) => {
-          if (cancelled) return
+          if (cancelled || isOffline()) return
           if (code === 4401) {
             void refreshAccessToken().then((newToken) => {
               if (newToken && !cancelled) connectWS()
@@ -176,7 +255,10 @@ export function SensorProvider({ children }: { children: ReactNode }) {
       wsRef.current = ws
     }
 
+    reconnectRef.current = connectWS
+
     function scheduleReconnect() {
+      if (isOffline()) return
       if (wsReconnectTimeoutRef.current) clearTimeout(wsReconnectTimeoutRef.current)
       wsReconnectTimeoutRef.current = setTimeout(() => {
         if (!cancelled) connectWS()
@@ -186,7 +268,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
     connectWS()
 
     async function backfill() {
-      if (cancelled) return
+      if (cancelled || isOffline()) return
       try {
         const latest = await fetchLatestSeries()
         if (cancelled) return
@@ -218,12 +300,12 @@ export function SensorProvider({ children }: { children: ReactNode }) {
         for (const s of hour) {
           if (!s.points.length) continue
           const buf = buffersRef.current[s.id]
-          const lastLiveT = buf.length ? buf[buf.length - 1].t ?? 0 : 0
-          // Keep any live WS points newer than the seed's tail (race: WS may
-          // have delivered readings while the fetch was in flight).
-          const fresh = buf.filter((p) => typeof p.t === 'number' && p.t > lastLiveT)
+          const seedLastT = s.points.length ? s.points[s.points.length - 1].t ?? 0 : 0
+          // Keep snapshot/live points newer than the seed's tail — this covers
+          // both a WS race and a restored snapshot after an offline reload.
+          const fresh = buf.filter((p) => typeof p.t === 'number' && (!seedLastT || p.t > seedLastT))
           // Seed is ascending; append preserved live tail so order is maintained.
-          const merged = [...s.points.filter((p) => typeof p.t === 'number' && (!lastLiveT || p.t <= lastLiveT)), ...fresh]
+          const merged = [...s.points.filter((p) => typeof p.t === 'number' && (!seedLastT || p.t <= seedLastT)), ...fresh]
           if (merged.length) {
             buffersRef.current[s.id] = merged.slice(-MAX_BUFFER)
             changed = true
@@ -241,9 +323,27 @@ export function SensorProvider({ children }: { children: ReactNode }) {
       cancelled = true
       if (wsRef.current) wsRef.current.close()
       if (wsReconnectTimeoutRef.current) clearTimeout(wsReconnectTimeoutRef.current)
+      reconnectRef.current = () => {}
       clearInterval(backfillId)
     }
   }, [])
+
+  // Don't retry the socket every 3 s while offline; resume as soon as we reconnect.
+  useEffect(() => {
+    if (online) {
+      // Only on a real offline→online transition — the first render must not
+      // open a second socket alongside the main connection effect.
+      if (wasOfflineRef.current) {
+        wasOfflineRef.current = false
+        reconnectRef.current()
+      }
+      return
+    }
+    wasOfflineRef.current = true
+    if (wsRef.current) wsRef.current.close()
+    wsRef.current = null
+    if (wsReconnectTimeoutRef.current) clearTimeout(wsReconnectTimeoutRef.current)
+  }, [online])
 
   // Drop any legacy polled/event-log history left under the old key.
   useEffect(() => {
@@ -288,6 +388,13 @@ export function SensorProvider({ children }: { children: ReactNode }) {
       if (eventId) seenEventsRef.current.add(eventId)
 
       if (isNew) {
+        // A new incident changes the event history. Ask the log screen to
+        // re-fetch when online — never drop the persisted snapshot, which is
+        // the only history available when the device is offline.
+        if (!isOffline() && typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('preventa:logs-changed'))
+        }
+
         const entry: SensorEvent = {
           id,
           sensorId: 'mq7',
@@ -363,8 +470,8 @@ export function SensorProvider({ children }: { children: ReactNode }) {
   }, [toasts, dismissToast, toastsPaused])
 
   const value = useMemo(
-    () => ({ series, lastFusion, notifications, unreadCount, markAllRead, toasts, dismissToast, pushToast }),
-    [series, lastFusion, notifications, unreadCount, markAllRead, toasts, dismissToast, pushToast],
+    () => ({ series, lastFusion, liveSavedAt, notifications, unreadCount, markAllRead, toasts, dismissToast, pushToast }),
+    [series, lastFusion, liveSavedAt, notifications, unreadCount, markAllRead, toasts, dismissToast, pushToast],
   )
 
   return (

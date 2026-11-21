@@ -5,6 +5,7 @@ import type {
 } from '@/lib/logReport'
 
 import { apiGet, apiBlob } from './client'
+import { CACHE_TAGS, CACHE_TTL, cachedFetch } from './cache'
 import { ENDPOINTS } from './endpoints'
 import { EVENT_LOOKBACK_MS, EVENT_RECOVERY_MS } from '@/lib/eventEvidence'
 
@@ -239,11 +240,14 @@ async function fetchAllEventPages(
 }
 
 /**
- * Loads fire events.
+ * Loads fire events. The assembled (all-pages) result is cached; persistence is
+ * capped to the newest 200 entries so a long event history cannot fill storage.
  */
-export async function fetchLogs(
+export function fetchLogs(
   filters?: LogFilters,
+  options?: { fresh?: boolean },
 ): Promise<LogEntry[]> {
+  const key = `logs:${filters?.deviceId ?? ''}:${filters?.status ?? ''}`
   const params = new URLSearchParams()
 
   if (filters?.deviceId) {
@@ -259,7 +263,13 @@ export async function fetchLogs(
     ? `${ENDPOINTS.events}?${qs}`
     : ENDPOINTS.events
 
-  return fetchAllEventPages(path)
+  return cachedFetch(key, () => fetchAllEventPages(path), {
+    ...CACHE_TTL.logs,
+    persist: true,
+    tags: [CACHE_TAGS.logs],
+    fresh: options?.fresh,
+    storageTransform: (logs) => logs.slice(0, 200),
+  })
 }
 
 /**
@@ -271,20 +281,26 @@ export async function fetchLogs(
  * GET /api/v1/devices/3/
  * Response device_id = "ESP32CAM_001"
  */
-export async function fetchDeviceCode(
+export function fetchDeviceCode(
   numericDeviceId: number,
 ): Promise<string> {
-  const device = await apiGet<DeviceDetail>(
-    ENDPOINTS.device(numericDeviceId),
+  return cachedFetch(
+    `device-code:${numericDeviceId}`,
+    async () => {
+      const device = await apiGet<DeviceDetail>(
+        ENDPOINTS.device(numericDeviceId),
+      )
+
+      if (!device?.device_id) {
+        throw new Error(
+          `Device ${numericDeviceId} did not return a hardware device_id.`,
+        )
+      }
+
+      return String(device.device_id)
+    },
+    { ...CACHE_TTL.deviceCode, tags: [CACHE_TAGS.devices] },
   )
-
-  if (!device?.device_id) {
-    throw new Error(
-      `Device ${numericDeviceId} did not return a hardware device_id.`,
-    )
-  }
-
-  return String(device.device_id)
 }
 
 /**

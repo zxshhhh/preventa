@@ -1,4 +1,5 @@
 import { API_BASE_URL, API_TIMEOUT_MS } from './config'
+import { clearApiCache } from './cache'
 
 export const TOKEN_KEY = 'preventa.token'
 export const REFRESH_KEY = 'preventa.refresh'
@@ -6,8 +7,25 @@ export const REFRESH_KEY = 'preventa.refresh'
 /** Event fired when a refresh attempt fails and the stored session is discarded. */
 export const AUTH_EXPIRED_EVENT = 'preventa:auth-expired'
 
+/**
+ * Live readings and push-notification history are session-local snapshots kept
+ * outside the API cache. They must be dropped with the rest of a user's data.
+ */
+export function clearSessionLocalData(): void {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.removeItem('preventa.live-snapshot.v1')
+    localStorage.removeItem('preventa.notifications.v3')
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 /** Notify app-wide listeners (AuthProvider) that the stored session is no longer valid. */
 export function signalAuthExpired(): void {
+  // Never leave one user's cached data behind for the next session.
+  clearApiCache()
+  clearSessionLocalData()
   if (typeof window === 'undefined') return
   window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
 }
@@ -100,6 +118,10 @@ let refreshPromise: Promise<string | null> | null = null
 async function refreshAccessToken(): Promise<string | null> {
   if (refreshPromise) return refreshPromise
 
+  // While offline there is no way to validate the refresh token. Keep the
+  // session (and its cached data) until the network comes back.
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return null
+
   const refresh = getRefreshToken()
   if (!refresh) return null
 
@@ -110,21 +132,27 @@ async function refreshAccessToken(): Promise<string | null> {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh }),
       })
-      if (!res.ok) throw new Error('Refresh failed')
-      const data = await res.json()
-      const access = data.access
-      if (access) {
-        setToken(access)
-      } else {
+      // A response from the server means the token was actually rejected —
+      // only then is it safe to drop the session and its cached data.
+      if (!res.ok) {
         setToken(null)
         setRefreshToken(null)
         signalAuthExpired()
+        return null
       }
-      return access
-    } catch {
+      const data = (await res.json().catch(() => null)) as { access?: string } | null
+      const access = data?.access
+      if (access) {
+        setToken(access)
+        return access
+      }
       setToken(null)
       setRefreshToken(null)
       signalAuthExpired()
+      return null
+    } catch {
+      // Network-level failure (offline / DNS / timeout) is NOT a rejected token.
+      // Keep the session so the saved data stays available until reconnect.
       return null
     } finally {
       refreshPromise = null

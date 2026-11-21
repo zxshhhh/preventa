@@ -29,7 +29,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     if (!isApiConfigured()) return null
     let cancelled = false
     setLoading(true)
-    void fetchDevices()
+    void fetchDevices({ fresh: reloadToken > 0 })
       .then((list) => {
         if (cancelled) return
         setDevices(list)
@@ -57,7 +57,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [reloadToken])
 
   useEffect(() => {
     if (!hydrated) return undefined

@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
     "icons": "node scripts/generate-icons.mjs",
     "dev:vinext": "vinext dev --port 3001",
     "build:vinext": "vinext build",

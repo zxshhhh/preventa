@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from 'react'
 import { useHydrated } from '@/lib/useHydrated'
+import { useOnline } from '@/lib/useOnline'
 import { isApiConfigured } from '@/lib/api/config'
+import { CACHE_TAGS, CACHE_TTL } from '@/lib/api/cache'
+import { useCachedQuery } from '@/lib/api/useCachedQuery'
 import {
   fetchLogs,
   fetchDeviceCode,
@@ -15,6 +18,7 @@ import type { LogEntry, ReadingEntry } from '@/lib/logReport'
 
 const MAX_REPORTS = 3
 const SKELETON_REPORTS = [0, 1, 2] as const
+const EMPTY_LOGS: LogEntry[] = []
 
 const TIER_BADGE: Record<number, { badge: string; label: string }> = {
   1: { badge: 'bg-(--green-indicator)/15 text-(--green-indicator)', label: 'Normal' },
@@ -29,7 +33,7 @@ const READING_FIELDS = [
   { label: 'Humidity', unit: '%', keys: ['smooth_humidity', 'humidity'] },
 ] as const
 
-type ReadingLoadState = 'loading' | 'ready' | 'missing' | 'error'
+type ReadingLoadState = 'loading' | 'ready' | 'missing' | 'error' | 'offline'
 
 interface ReportReading {
   state: ReadingLoadState
@@ -114,6 +118,9 @@ function ReportCard({ log, reading }: { log: LogEntry; reading: ReportReading | 
       {r.state === 'error' && (
         <p className="text-xs text-(--red-indicator)">Sensor readings unavailable.</p>
       )}
+      {r.state === 'offline' && (
+        <p className="text-xs text-(--amber-indicator)">Readings need a connection.</p>
+      )}
     </div>
   )
 }
@@ -143,20 +150,34 @@ function ReportCardSkeleton() {
 
 export default function RecentReportLog() {
   const hydrated = useHydrated()
+  const online = useOnline()
   const [reports, setReports] = useState<LogEntry[]>([])
   const [reportReadings, setReportReadings] = useState<Record<string, ReportReading>>({})
-  const [loading, setLoading] = useState(false)
+  const [readingsLoading, setReadingsLoading] = useState(false)
+
+  // Shares the same cached log payload as the report-logs screen; no second
+  // all-pages /events/ request when both are mounted.
+  const { data: cachedLogs, refreshing } = useCachedQuery<LogEntry[]>(
+    'logs:',
+    () => fetchLogs(),
+    {
+      ...CACHE_TTL.logs,
+      persist: true,
+      tags: [CACHE_TAGS.logs],
+      storageTransform: (logs) => logs.slice(0, 200),
+      enabled: hydrated && isApiConfigured(),
+    },
+  )
+  const logs = cachedLogs ?? EMPTY_LOGS
+  const loading = (refreshing || readingsLoading) && reports.length === 0
 
   useEffect(() => {
     if (!hydrated || !isApiConfigured()) return
     let cancelled = false
 
     const load = async () => {
-      setLoading(true)
+      setReadingsLoading(true)
       try {
-        const logs = await fetchLogs()
-        if (cancelled) return
-
         const latest = [...logs]
           .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
           .slice(0, MAX_REPORTS)
@@ -165,6 +186,15 @@ export default function RecentReportLog() {
 
         if (!latest.length) {
           setReportReadings({})
+          return
+        }
+
+        // Event readings are fetched live and never cached. Offline we still
+        // show the saved report rows, with an explicit "needs a connection".
+        if (!online) {
+          const offline: Record<string, ReportReading> = {}
+          for (const log of latest) offline[reportKey(log)] = { state: 'offline', reading: null }
+          setReportReadings(offline)
           return
         }
 
@@ -210,9 +240,9 @@ export default function RecentReportLog() {
           }),
         )
       } catch {
-        /* keep the last known reports if the fetch fails */
+        /* keep the last known reports if a reading fetch fails */
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) setReadingsLoading(false)
       }
     }
 
@@ -220,7 +250,7 @@ export default function RecentReportLog() {
     return () => {
       cancelled = true
     }
-  }, [hydrated])
+  }, [hydrated, logs, online])
 
   return (
     <section className="panel-card p-5 flex flex-col gap-4">

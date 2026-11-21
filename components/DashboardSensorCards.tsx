@@ -1,4 +1,5 @@
 ﻿import { useEffect, useState, type ReactNode } from 'react'
+import { useOnline, formatSavedAt } from '@/lib/useOnline'
 import DashboardMetricCard from './ui/DashboardMetricCard'
 import ChartHoverOverlay from './ui/ChartHoverOverlay'
 import { ChartHoverProvider, useChartHoverApi } from './ui/ChartHoverProvider'
@@ -80,9 +81,12 @@ interface Props {
   chartSeries: SensorSeries[]
   range: TrendRange
   onRangeChange: (r: TrendRange) => void
+  /** Timestamp of the saved snapshot currently shown (live or historical). */
+  cachedAt?: number | null
 }
 
-export default function DashboardSensorCards({ series, chartSeries, range, onRangeChange }: Props) {
+export default function DashboardSensorCards({ series, chartSeries, range, onRangeChange, cachedAt }: Props) {
+  const online = useOnline()
   // Re-evaluate feed freshness on a tick so the dot flips to red even when no
   // new readings arrive (and trigger no re-render otherwise). `now` starts at 0
   // and is only set client-side after mount, keeping SSR/hydration consistent.
@@ -105,7 +109,7 @@ export default function DashboardSensorCards({ series, chartSeries, range, onRan
       if (typeof p.t === 'number' && p.t > lastReadingT) lastReadingT = p.t
     }
   }
-  const liveFeed = now > 0 && lastReadingT > 0 && now - lastReadingT <= LIVE_STALE_MS
+  const liveFeed = online && now > 0 && lastReadingT > 0 && now - lastReadingT <= LIVE_STALE_MS
 
   // Every number on the cards is derived from the SAME bucketed series the
   // trend chart plots: headline = newest dot, delta = first dot → newest dot.
@@ -145,6 +149,11 @@ export default function DashboardSensorCards({ series, chartSeries, range, onRan
           <div>
             <h2 className="font-bold text-base text-gray-100 tracking-wide">Activity Reading</h2>
             <p className="text-xs text-gray-400 mt-0.5">Readings adapt to the selected trend window</p>
+            {!online && (
+              <p className="text-xs text-(--amber-indicator) mt-0.5">
+                CACHED DATA{cachedAt ? ` · ${formatSavedAt(cachedAt)}` : ''}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-1 flex-wrap bg-white/5 border border-white/10 rounded-lg p-1">
             {RANGES.map((r) => (
@@ -161,7 +170,7 @@ export default function DashboardSensorCards({ series, chartSeries, range, onRan
                     <span
                       className={
                         'relative inline-flex rounded-full h-2 w-2 ' +
-                        (liveFeed ? 'bg-(--green-indicator)' : 'bg-(--red-indicator)')
+                        (!online ? 'bg-(--amber-indicator)' : liveFeed ? 'bg-(--green-indicator)' : 'bg-(--red-indicator)')
                       }
                     />
                   </span>
@@ -171,6 +180,11 @@ export default function DashboardSensorCards({ series, chartSeries, range, onRan
             ))}
           </div>
         </div>
+        {!online && range !== '1H' && chartSeries.every((s) => s.points.length === 0) && (
+          <p role="status" className="text-sm text-(--amber-indicator)">
+            No saved data for this range. Reconnect once to save it for offline use.
+          </p>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-5">
           {cards.map(({ id, ...d }) => (
             <DashboardMetricCard key={id} id={id} {...d} />

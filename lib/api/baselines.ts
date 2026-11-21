@@ -1,4 +1,5 @@
 import { apiGet } from './client'
+import { CACHE_TAGS, CACHE_TTL, cachedFetch } from './cache'
 import { ENDPOINTS } from './endpoints'
 
 /** Averaged readings captured during the device's last calibration run. */
@@ -66,10 +67,16 @@ function extractBaseline(input: unknown): DeviceBaseline | null {
 }
 
 /** GET /baselines/?device_id=<hardware-id> — calibration context for the selected device. */
-export async function fetchBaseline(hardwareId?: string): Promise<DeviceBaseline | null> {
+export function fetchBaseline(hardwareId?: string): Promise<DeviceBaseline | null> {
   const params = new URLSearchParams()
   if (hardwareId) params.set('device_id', hardwareId)
   const suffix = params.toString() ? `?${params.toString()}` : ''
-  const data = await apiGet<unknown>(`${ENDPOINTS.baselines}${suffix}`)
-  return extractBaseline(data)
+  return cachedFetch(
+    `baseline:${hardwareId ?? ''}`,
+    async () => {
+      const data = await apiGet<unknown>(`${ENDPOINTS.baselines}${suffix}`)
+      return extractBaseline(data)
+    },
+    { ...CACHE_TTL.baselines, persist: true, tags: [CACHE_TAGS.baselines] },
+  )
 }

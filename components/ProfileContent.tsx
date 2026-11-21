@@ -4,8 +4,11 @@ import { useEffect, useState } from 'react'
 import { useSensors } from '@/context/useSensors'
 import { useDevices } from '@/context/useDevice'
 import { useHydrated } from '@/lib/useHydrated'
+import { useOnline } from '@/lib/useOnline'
 import { isApiConfigured } from '@/lib/api/config'
 import { getUsername } from '@/lib/api/auth'
+import { CACHE_TAGS, CACHE_TTL } from '@/lib/api/cache'
+import { useCachedQuery } from '@/lib/api/useCachedQuery'
 import {
   activeRecipient,
   createContact,
@@ -19,6 +22,7 @@ import {
   updateContact,
   updateResidence,
   type ProfileContact,
+  type ProfileData,
   type ResidenceEntry,
 } from '@/lib/api/profile'
 import UserAvatar from '@/components/ui/UserAvatar'
@@ -34,6 +38,7 @@ const EMPTY_DRAFT: ContactDraft = { name: '', phone: '', priority: 1 }
 export default function ProfileContent() {
   const { pushToast } = useSensors()
   const hydrated = useHydrated()
+  const online = useOnline()
   const [contacts, setContacts] = useState<ProfileContact[]>([
     { id: 1, name: 'User TM', phone: '(+63) 915 5123 867', priority: 1 },
   ])
@@ -43,28 +48,30 @@ export default function ProfileContent() {
   const [editDraft, setEditDraft] = useState<ContactDraft>(EMPTY_DRAFT)
   const [confirmDeleteId, setConfirmDeleteId] = useState<ProfileContact['id'] | null>(null)
 
+  const { data: profile } = useCachedQuery<ProfileData | null>(
+    'profile',
+    () => fetchProfile(),
+    {
+      ...CACHE_TTL.profile,
+      persist: true,
+      tags: [CACHE_TAGS.profile],
+      enabled: hydrated && isApiConfigured(),
+    },
+  )
+
   useEffect(() => {
-    if (!hydrated || !isApiConfigured()) return
-    let cancelled = false
-    void fetchProfile()
-      .then((profile) => {
-        if (cancelled || !profile) return
-        if (profile.contacts?.length) {
-          setContacts(profile.contacts.map((c) => ({ id: c.id, name: c.name, phone: c.phone, priority: c.priority })))
-        }
-      })
-      .catch(() => {
-        /* keep the local default contacts if the fetch fails */
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [hydrated])
+    if (!profile?.contacts?.length) return
+    const timer = setTimeout(() => {
+      setContacts(profile.contacts.map((c) => ({ id: c.id, name: c.name, phone: c.phone, priority: c.priority })))
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [profile])
 
   const username = hydrated ? getUsername() : null
   const displayName = username ? username.toUpperCase() : hydrated ? 'USER' : ''
 
   const addContact = () => {
+    if (!online) return
     const name = addDraft.name.trim() || 'New Contact'
     const phone = addDraft.phone.trim()
     const priority = addDraft.priority
@@ -91,6 +98,7 @@ export default function ProfileContent() {
   }
 
   const saveEdit = (original: ProfileContact) => {
+    if (!online) return
     // Send only the changed fields, per the PATCH /contacts/{id}/ contract.
     const changes: { name?: string; phone?: string; priority?: number } = {}
     const name = editDraft.name.trim() || original.name
@@ -115,6 +123,7 @@ export default function ProfileContent() {
   }
 
   const removeContact = (contact: ProfileContact) => {
+    if (!online) return
     const finish = () => {
       setContacts((c) => c.filter((c2) => c2.id !== contact.id))
       setConfirmDeleteId(null)
@@ -145,11 +154,18 @@ export default function ProfileContent() {
             <h2 className="font-bold text-base text-gray-100">Emergency Contact</h2>
             <button
               onClick={() => { setAdding(true); setEditingId(null); setConfirmDeleteId(null) }}
-              className="btn-ghost btn-sm"
+              disabled={!online}
+              title={online ? undefined : 'Reconnect to make changes'}
+              className="btn-ghost btn-sm disabled:opacity-40 disabled:cursor-not-allowed"
             >
               + Add Contact
             </button>
           </div>
+          {!online && (
+            <p className="text-xs font-semibold text-(--amber-indicator) mb-3">
+              Offline — contacts are read-only until you reconnect.
+            </p>
+          )}
           {recipient && (
             <p className="text-xs text-gray-400 mb-3">
               Automatic SMS goes to{' '}
@@ -192,7 +208,8 @@ export default function ProfileContent() {
                       </button>
                       <button
                         onClick={() => saveEdit(contact)}
-                        className="btn-primary btn-sm"
+                        disabled={!online}
+                        className="btn-primary btn-sm disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         SAVE
                       </button>
@@ -206,6 +223,7 @@ export default function ProfileContent() {
                   contact={contact}
                   isRecipient={recipient?.id === contact.id}
                   confirming={confirmDeleteId === contact.id}
+                  offline={!online}
                   onEdit={() => startEdit(contact)}
                   onDelete={() => { setEditingId(null); setConfirmDeleteId(contact.id) }}
                   onConfirmDelete={() => removeContact(contact)}
@@ -240,7 +258,8 @@ export default function ProfileContent() {
                   </button>
                   <button
                     onClick={addContact}
-                    className="btn-primary btn-sm"
+                    disabled={!online}
+                    className="btn-primary btn-sm disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     SAVE
                   </button>
@@ -296,13 +315,14 @@ interface ContactRowProps {
   contact: ProfileContact
   isRecipient: boolean
   confirming: boolean
+  offline: boolean
   onEdit: () => void
   onDelete: () => void
   onConfirmDelete: () => void
   onCancelDelete: () => void
 }
 
-function ContactRow({ contact, isRecipient, confirming, onDelete, onEdit, onConfirmDelete, onCancelDelete }: ContactRowProps) {
+function ContactRow({ contact, isRecipient, confirming, offline, onDelete, onEdit, onConfirmDelete, onCancelDelete }: ContactRowProps) {
   const invalid = !isValidRecipient(contact)
   return (
     <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5">
@@ -332,15 +352,17 @@ function ContactRow({ contact, isRecipient, confirming, onDelete, onEdit, onConf
       {confirming ? (
         <div className="flex items-center gap-1 shrink-0">
           <span className="text-xs font-bold text-gray-400 hidden sm:inline">Delete?</span>
-          <button onClick={onConfirmDelete} className="btn-ghost btn-sm text-(--red-indicator)">YES</button>
+          <button onClick={onConfirmDelete} disabled={offline} className="btn-ghost btn-sm text-(--red-indicator) disabled:opacity-40 disabled:cursor-not-allowed">YES</button>
           <button onClick={onCancelDelete} className="btn-ghost btn-sm">NO</button>
         </div>
       ) : (
         <div className="flex items-center gap-1 shrink-0">
           <button
             onClick={onEdit}
+            disabled={offline}
             aria-label={`Edit ${contact.name}`}
-            className="btn-icon btn-sm"
+            title={offline ? 'Reconnect to make changes' : undefined}
+            className="btn-icon btn-sm disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
@@ -348,8 +370,9 @@ function ContactRow({ contact, isRecipient, confirming, onDelete, onEdit, onConf
           </button>
           <button
             onClick={onDelete}
+            disabled={offline}
             aria-label={`Delete ${contact.name}`}
-            className="btn-icon btn-sm text-(--red-indicator)"
+            className="btn-icon btn-sm text-(--red-indicator) disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 6h18" />
@@ -394,6 +417,7 @@ const EMPTY_RESIDENCE_DRAFT: ResidenceDraft = { address: '', latitude: '', longi
 function ResidencesSection() {
   const { pushToast } = useSensors()
   const { devices, refresh } = useDevices()
+  const online = useOnline()
   const [residences, setResidences] = useState<ResidenceEntry[]>([])
   const [loaded, setLoaded] = useState(false)
   const [adding, setAdding] = useState(false)
@@ -422,6 +446,7 @@ function ResidencesSection() {
   const deviceCount = (residenceId: number) => devices.filter((d) => d.residenceId === residenceId).length
 
   const addResidence = () => {
+    if (!online) return
     const address = addDraft.address.trim()
     if (!address) return
     if (!isApiConfigured()) {
@@ -444,6 +469,7 @@ function ResidencesSection() {
   }
 
   const saveEdit = (entry: ResidenceEntry) => {
+    if (!online) return
     const address = editDraft.address.trim() || entry.address
     const changes: { address?: string; latitude?: string | null; longitude?: string | null } = {}
     if (address !== entry.address) changes.address = address
@@ -467,7 +493,7 @@ function ResidencesSection() {
   }
 
   const removeResidence = (entry: ResidenceEntry) => {
-    if (!isApiConfigured()) {
+    if (!online || !isApiConfigured()) {
       setConfirmDeleteId(null)
       return
     }
@@ -489,10 +515,17 @@ function ResidencesSection() {
           <p className="text-xs text-gray-500 mt-0.5">
             Group boards by site. Removing a residence deletes its contacts and unlinks its devices.
           </p>
+          {!online && (
+            <p className="text-xs font-semibold text-(--amber-indicator) mt-1">
+              Offline — residences are read-only until you reconnect.
+            </p>
+          )}
         </div>
         <button
           onClick={() => { setAdding((a) => !a); setEditingId(null); setConfirmDeleteId(null) }}
-          className="btn-ghost btn-sm"
+          disabled={!online}
+          title={online ? undefined : 'Reconnect to make changes'}
+          className="btn-ghost btn-sm disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {adding ? 'CANCEL' : '+ Add Residence'}
         </button>
@@ -524,7 +557,7 @@ function ResidencesSection() {
             <button onClick={() => { setAdding(false); setAddDraft(EMPTY_RESIDENCE_DRAFT) }} className="btn-ghost btn-sm">
               CANCEL
             </button>
-            <button onClick={addResidence} disabled={!addDraft.address.trim()} className="btn-primary btn-sm disabled:opacity-40 disabled:cursor-not-allowed">
+            <button onClick={addResidence} disabled={!online || !addDraft.address.trim()} className="btn-primary btn-sm disabled:opacity-40 disabled:cursor-not-allowed">
               SAVE
             </button>
           </div>
@@ -566,7 +599,7 @@ function ResidencesSection() {
                     <button onClick={() => { setEditingId(null); setEditDraft(EMPTY_RESIDENCE_DRAFT) }} className="btn-ghost btn-sm">
                       CANCEL
                     </button>
-                    <button onClick={() => saveEdit(entry)} className="btn-primary btn-sm">
+                    <button onClick={() => saveEdit(entry)} disabled={!online} className="btn-primary btn-sm disabled:opacity-40 disabled:cursor-not-allowed">
                       SAVE
                     </button>
                   </div>
@@ -592,7 +625,7 @@ function ResidencesSection() {
                 {confirmDeleteId === entry.id ? (
                   <div className="flex items-center gap-1 shrink-0">
                     <span className="text-xs font-bold text-gray-400 hidden sm:inline">Deletes contacts &amp; unlinks devices —</span>
-                    <button onClick={() => removeResidence(entry)} className="btn-ghost btn-sm text-(--red-indicator)">DELETE</button>
+                    <button onClick={() => removeResidence(entry)} disabled={!online} className="btn-ghost btn-sm text-(--red-indicator) disabled:opacity-40 disabled:cursor-not-allowed">DELETE</button>
                     <button onClick={() => setConfirmDeleteId(null)} className="btn-ghost btn-sm">CANCEL</button>
                   </div>
                 ) : (
@@ -603,8 +636,9 @@ function ResidencesSection() {
                         setEditingId(entry.id)
                         setEditDraft({ address: entry.address, latitude: entry.latitude ?? '', longitude: entry.longitude ?? '' })
                       }}
+                      disabled={!online}
                       aria-label={`Edit residence ${entry.id}`}
-                      className="btn-icon btn-sm"
+                      className="btn-icon btn-sm disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
@@ -612,8 +646,9 @@ function ResidencesSection() {
                     </button>
                     <button
                       onClick={() => { setEditingId(null); setConfirmDeleteId(entry.id) }}
+                      disabled={!online}
                       aria-label={`Remove residence ${entry.id}`}
-                      className="btn-icon btn-sm text-(--red-indicator)"
+                      className="btn-icon btn-sm text-(--red-indicator) disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M3 6h18" />

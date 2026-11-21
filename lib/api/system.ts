@@ -1,4 +1,5 @@
 import { apiGet, apiPost, apiDelete } from './client'
+import { CACHE_TAGS, CACHE_TTL, cachedFetch, invalidateTags } from './cache'
 import { ENDPOINTS } from './endpoints'
 
 interface Device {
@@ -26,7 +27,7 @@ export interface OwnerDevice {
   residenceId: number | null
 }
 
-export async function fetchDevices(): Promise<OwnerDevice[]> {
+async function loadDevices(): Promise<OwnerDevice[]> {
   const data = await apiGet<PaginatedDevices>(ENDPOINTS.devices)
   return (data?.results ?? []).map((d) => ({
     id: d.id,
@@ -38,10 +39,22 @@ export async function fetchDevices(): Promise<OwnerDevice[]> {
   }))
 }
 
-export async function fetchSystemStatus(): Promise<boolean> {
-  const data = await apiGet<PaginatedDevices>(ENDPOINTS.devices)
-  const results = data?.results ?? []
-  return results.some((d) => d.status === 'online')
+/** Cached device list; `fresh: true` is used by explicit refresh after mutations. */
+export function fetchDevices(options?: { fresh?: boolean }): Promise<OwnerDevice[]> {
+  return cachedFetch('devices', loadDevices, {
+    ...CACHE_TTL.devices,
+    persist: true,
+    tags: [CACHE_TAGS.devices],
+    fresh: options?.fresh,
+  })
+}
+
+export function fetchSystemStatus(): Promise<boolean> {
+  return cachedFetch(
+    'system-status',
+    async () => (await fetchDevices()).some((d) => d.status === 'online'),
+    { ...CACHE_TTL.devices, tags: [CACHE_TAGS.devices] },
+  )
 }
 
 export interface RegisteredDevice {
@@ -148,6 +161,8 @@ export async function registerDevice(input: {
   const outer = asRecord(Array.isArray(payload) ? payload[0] : payload)
   const device = unwrapRegisteredDevice(payload)
 
+  invalidateTags([CACHE_TAGS.devices, CACHE_TAGS.settings, CACHE_TAGS.baselines])
+
   return {
     id:
       pickNumber(device, ['id', 'pk']) ??
@@ -166,4 +181,5 @@ export async function registerDevice(input: {
 /** DELETE /devices/{pk}/delete/ — cascades readings, events, baselines and capture records. */
 export async function deleteDevice(pk: number): Promise<void> {
   await apiDelete(ENDPOINTS.deviceDelete(pk))
+  invalidateTags([CACHE_TAGS.devices, CACHE_TAGS.settings, CACHE_TAGS.baselines, CACHE_TAGS.logs])
 }

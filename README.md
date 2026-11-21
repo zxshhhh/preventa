@@ -1,3 +1,5 @@
+[![CI/CD](https://github.com/zxshhhh/preventa/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/zxshhhh/preventa/actions/workflows/ci-cd.yml)
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
@@ -34,3 +36,22 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## CI/CD
+
+GitHub Actions runs `.github/workflows/ci-cd.yml`:
+
+- **Every pull request and push to `main`** — `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build:vinext`.
+- **Push to `main` (or manual "Run workflow")** — once checks pass, `npm run deploy:vinext` deploys the app to Cloudflare Workers.
+
+Required repository secrets (Settings → Secrets and variables → Actions → New repository secret):
+
+| Secret | Purpose |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare token created with the "Edit Cloudflare Workers" template |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID (`dash.cloudflare.com/<id>` or `npx wrangler whoami`) |
+| `NEXT_PUBLIC_API_URL` | Backend API base URL baked into the build, no trailing slash |
+
+Optional repository variable `WORKER_URL` (e.g. `https://preventa.<subdomain>.workers.dev`) enables a post-deploy smoke check of `/login`.
+
+Firebase web config and the VAPID key are public values by design and remain in `next.config.ts`; they do not need secrets.

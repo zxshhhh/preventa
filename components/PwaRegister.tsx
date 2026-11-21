@@ -18,7 +18,7 @@ export default function PwaRegister() {
           appId: config.appId,
         }).toString()}`
       : '/sw.js'
-    navigator.serviceWorker.register(url, { type: 'module' }).catch(() => {})
+    navigator.serviceWorker.register(url, { type: 'module', updateViaCache: 'none' }).catch(() => {})
   }, [])
 
   return null

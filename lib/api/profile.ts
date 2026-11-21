@@ -1,4 +1,5 @@
 import { apiGet, apiPost, apiPatch, apiDelete } from './client'
+import { CACHE_TAGS, CACHE_TTL, cachedFetch, invalidateTags } from './cache'
 import { ENDPOINTS } from './endpoints'
 
 export interface ProfileContact {
@@ -91,19 +92,21 @@ function normalizeProfile(residence: Residence | null, contacts: ProfileContact[
   }
 }
 
-export async function fetchProfile(): Promise<ProfileData | null> {
-  try {
-    const residences = await apiGet<PaginatedResidences>(ENDPOINTS.residences)
-    const first = residences?.results?.[0]
-    if (!first) return null
+export function fetchProfile(): Promise<ProfileData | null> {
+  return cachedFetch(
+    'profile',
+    async () => {
+      const residences = await apiGet<PaginatedResidences>(ENDPOINTS.residences)
+      const first = residences?.results?.[0]
+      if (!first) return null
 
-    const contactsData = await apiGet<PaginatedContacts>(ENDPOINTS.residenceContacts(first.id))
-    const contacts = (contactsData?.results ?? []).map(normalizeContact)
+      const contactsData = await apiGet<PaginatedContacts>(ENDPOINTS.residenceContacts(first.id))
+      const contacts = (contactsData?.results ?? []).map(normalizeContact)
 
-    return normalizeProfile(first, contacts)
-  } catch {
-    return null
-  }
+      return normalizeProfile(first, contacts)
+    },
+    { ...CACHE_TTL.profile, persist: true, tags: [CACHE_TAGS.profile] },
+  )
 }
 
 export async function createContact(contact: Omit<ProfileContact, 'id'>): Promise<ProfileContact> {
@@ -118,17 +121,20 @@ export async function createContact(contact: Omit<ProfileContact, 'id'>): Promis
     priority,
   })
 
+  invalidateTags([CACHE_TAGS.profile])
   return normalizeContact(data)
 }
 
 /** Saves only the changed fields to PATCH /contacts/{id}/ and returns the server-normalized contact. */
 export async function updateContact(id: string | number, changes: ContactChanges): Promise<ProfileContact> {
   const data = await apiPatch<ContactItem>(ENDPOINTS.contact(id), changes)
+  invalidateTags([CACHE_TAGS.profile])
   return normalizeContact(data)
 }
 
 export async function deleteContact(id: string | number): Promise<void> {
   await apiDelete(ENDPOINTS.contact(id))
+  invalidateTags([CACHE_TAGS.profile])
 }
 
 /** Owner-scoped residence list (Phase 6 — residence management). */
@@ -156,9 +162,15 @@ function normalizeResidence(raw: Residence): ResidenceEntry {
   }
 }
 
-export async function fetchResidences(): Promise<ResidenceEntry[]> {
-  const data = await apiGet<PaginatedResidences>(ENDPOINTS.residences)
-  return (data?.results ?? []).map(normalizeResidence)
+export function fetchResidences(): Promise<ResidenceEntry[]> {
+  return cachedFetch(
+    'residences',
+    async () => {
+      const data = await apiGet<PaginatedResidences>(ENDPOINTS.residences)
+      return (data?.results ?? []).map(normalizeResidence)
+    },
+    { ...CACHE_TTL.profile, persist: true, tags: [CACHE_TAGS.profile] },
+  )
 }
 
 export async function createResidence(changes: ResidenceChanges): Promise<ResidenceEntry> {
@@ -168,6 +180,7 @@ export async function createResidence(changes: ResidenceChanges): Promise<Reside
   if (changes.longitude !== undefined && changes.longitude !== null && changes.longitude !== '') body.longitude = changes.longitude
   const data = await apiPost<Residence>(ENDPOINTS.residences, body)
   if (!data?.id) throw new Error('Residence creation failed — no residence returned')
+  invalidateTags([CACHE_TAGS.profile])
   return normalizeResidence(data)
 }
 
@@ -178,10 +191,12 @@ export async function updateResidence(id: number, changes: ResidenceChanges): Pr
   if (changes.longitude !== undefined) body.longitude = changes.longitude === '' ? null : changes.longitude
   const data = await apiPatch<Residence>(ENDPOINTS.residence(id), body)
   if (!data?.id) throw new Error('Residence update failed — no residence returned')
+  invalidateTags([CACHE_TAGS.profile])
   return normalizeResidence(data)
 }
 
 /** Destructive: the backend deletes the residence's contacts and unlinks its devices. */
 export async function deleteResidence(id: number): Promise<void> {
   await apiDelete(ENDPOINTS.residence(id))
+  invalidateTags([CACHE_TAGS.profile, CACHE_TAGS.devices, CACHE_TAGS.settings, CACHE_TAGS.baselines])
 }

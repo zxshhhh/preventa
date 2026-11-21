@@ -4,12 +4,16 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import LogMonthModal from '@/components/LogMonthModal'
 import LogDetailModal from '@/components/LogDetailModal'
 import { useHydrated } from '@/lib/useHydrated'
+import { useOnline } from '@/lib/useOnline'
 import { useSensors } from '@/context/useSensors'
 import type { LogEntry, MonthGroup } from '@/lib/logReport'
 import { groupByMonth, daySummary, daysInMonth, firstWeekday, monthActivity } from '@/lib/logReport'
 import { fetchLogs } from '@/lib/api/reports'
 import { isApiConfigured } from '@/lib/api/config'
+import { CACHE_TAGS, CACHE_TTL } from '@/lib/api/cache'
+import { useCachedQuery } from '@/lib/api/useCachedQuery'
 
+const EMPTY_LOGS: LogEntry[] = []
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
 const SKELETON_MONTHS = Array.from({ length: 12 }, (_, i) => i)
 const SKELETON_DAY_CELLS = Array.from({ length: 35 }, (_, i) => i)
@@ -19,17 +23,31 @@ const REFRESH_DEBOUNCE_MS = 3000
 
 export default function LogConsole() {
   const hydrated = useHydrated()
+  const online = useOnline()
   const { lastFusion } = useSensors()
   const [selectedMonth, setSelectedMonth] = useState<MonthGroup | null>(null)
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null)
-  const [logs, setLogs] = useState<LogEntry[]>([])
   const [yearKeys, setYearKeys] = useState<number[]>([])
   const [selectedYear, setSelectedYear] = useState<number | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [reloadToken, setReloadToken] = useState(0)
   const lastTierRef = useRef<number | null>(null)
   const lastRefreshRef = useRef(0)
+
+  // Persisted logs render immediately after hydration; background refreshes and
+  // push/tier invalidations arrive through the subscription without a reload.
+  const { data: cachedLogs, error: fetchError, refreshing, refresh } = useCachedQuery<LogEntry[]>(
+    'logs:',
+    () => fetchLogs(),
+    {
+      ...CACHE_TTL.logs,
+      persist: true,
+      tags: [CACHE_TAGS.logs],
+      storageTransform: (logs) => logs.slice(0, 200),
+      enabled: hydrated && isApiConfigured(),
+    },
+  )
+  const logs = cachedLogs ?? EMPTY_LOGS
+  const loading = refreshing && logs.length === 0
+  const error = fetchError ? 'Could not load event history — check your connection and retry.' : null
 
   const months = useMemo(
     () => groupByMonth(logs, selectedYear ? [selectedYear] : yearKeys),
@@ -37,37 +55,14 @@ export default function LogConsole() {
   )
 
   useEffect(() => {
-    if (!hydrated || !isApiConfigured()) return
-    let cancelled = false
-
-    // Deferred into an async function so the reset setState calls aren't synchronous in the effect body.
-    const load = async () => {
-      lastRefreshRef.current = Date.now()
-      setLoading(true)
-      setError(null)
-
-      try {
-        const data = await fetchLogs()
-        if (cancelled) return
-        setLogs(data)
-        const years = Array.from(new Set(data.map((l) => Number(l.timestamp.slice(0, 4))))).sort((a, b) => b - a)
-        setYearKeys(years)
-        // Keep the current year while it still has data, otherwise fall back to the newest year available.
-        setSelectedYear((prev) => (prev !== null && years.includes(prev) ? prev : years[0] ?? null))
-        setError(null)
-      } catch {
-        if (!cancelled) setError('Could not load event history — check your connection and retry.')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-
-    void load()
-
-    return () => {
-      cancelled = true
-    }
-  }, [hydrated, reloadToken])
+    const timer = setTimeout(() => {
+      const years = Array.from(new Set(logs.map((l) => Number(l.timestamp.slice(0, 4))))).sort((a, b) => b - a)
+      setYearKeys(years)
+      // Keep the current year while it still has data, otherwise fall back to the newest year available.
+      setSelectedYear((prev) => (prev !== null && years.includes(prev) ? prev : years[0] ?? null))
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [logs])
 
   // Refresh on screen focus and after reconnect.
   useEffect(() => {
@@ -76,17 +71,23 @@ export default function LogConsole() {
       if (document.visibilityState === 'hidden') return
       if (Date.now() - lastRefreshRef.current < REFRESH_DEBOUNCE_MS) return
       lastRefreshRef.current = Date.now()
-      setReloadToken((t) => t + 1)
+      void refresh()
+    }
+    const onPush = () => {
+      if (document.visibilityState === 'hidden') return
+      void refresh()
     }
     window.addEventListener('focus', bump)
     document.addEventListener('visibilitychange', bump)
     window.addEventListener('online', bump)
+    window.addEventListener('preventa:logs-changed', onPush)
     return () => {
       window.removeEventListener('focus', bump)
       document.removeEventListener('visibilitychange', bump)
       window.removeEventListener('online', bump)
+      window.removeEventListener('preventa:logs-changed', onPush)
     }
-  }, [hydrated])
+  }, [hydrated, refresh])
 
   // Refresh when active-device readings indicate a tier transition (crossing Tier 3).
   useEffect(() => {
@@ -99,8 +100,8 @@ export default function LogConsole() {
     if (!crossed) return
     if (Date.now() - lastRefreshRef.current < REFRESH_DEBOUNCE_MS) return
     lastRefreshRef.current = Date.now()
-    setReloadToken((t) => t + 1)
-  }, [lastFusion, hydrated])
+    void refresh()
+  }, [lastFusion, hydrated, refresh])
 
   const [today, setToday] = useState(() => new Date())
 
@@ -157,7 +158,12 @@ export default function LogConsole() {
       {error && (
         <div className="panel-card p-4 mb-5 flex flex-wrap items-center justify-between gap-3 border border-red-400/25 bg-red-400/10">
           <p className="text-xs font-semibold text-(--red-indicator)">{error}</p>
-          <button onClick={() => setReloadToken((t) => t + 1)} className="btn-outline btn-sm">
+          <button
+            onClick={() => void refresh()}
+            disabled={!online}
+            title={online ? undefined : 'Reconnect to retry'}
+            className="btn-outline btn-sm disabled:opacity-40 disabled:cursor-not-allowed"
+          >
             RETRY
           </button>
         </div>

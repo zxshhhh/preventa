@@ -1,6 +1,7 @@
 import type { SensorId, SensorSeries, TrendRange, SeriesPoint } from '@/lib/dashboardData'
 import { RANGE_MS, bucketPoints, formatRangeLabel } from '@/lib/dashboardData'
 import { apiGet } from './client'
+import { CACHE_TAGS, CACHE_TTL, cachedFetch } from './cache'
 import { ENDPOINTS } from './endpoints'
 
 const SENSOR_IDS: SensorId[] = ['mq7', 'dht22', 'acs712', 'humidity']
@@ -100,11 +101,27 @@ export async function fetchLatestSeries(): Promise<SensorSeries[]> {
   return normalizeReadings(data.results ?? [], '1H')
 }
 
-/** Raw (un-bucketed) readings for the requested window — callers that merge live points bucket themselves. */
-export async function fetchRangeRaw(range: TrendRange): Promise<SensorSeries[]> {
-  const items = await fetchWindow(range)
-  if (!items.length) return []
-  return normalizeReadings(items, range)
+/**
+ * Raw (un-bucketed) readings for the requested window — callers that merge live
+ * points bucket themselves. The in-memory value stays raw; only the persisted
+ * snapshot is compacted to bucketed points so history survives an offline reload
+ * without blowing the localStorage budget. Live telemetry never goes through here.
+ */
+export function fetchRangeRaw(range: TrendRange): Promise<SensorSeries[]> {
+  return cachedFetch(
+    `range:${range}`,
+    async () => {
+      const items = await fetchWindow(range)
+      if (!items.length) return []
+      return normalizeReadings(items, range)
+    },
+    {
+      ...CACHE_TTL.ranges,
+      persist: true,
+      tags: [CACHE_TAGS.ranges],
+      storageTransform: (series) => series.map((s) => ({ id: s.id, points: bucketPoints(s.points, range) })),
+    },
+  )
 }
 
 export async function fetchRangeSeries(range: TrendRange): Promise<SensorSeries[]> {

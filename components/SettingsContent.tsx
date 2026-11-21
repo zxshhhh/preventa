@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react'
 import { useHydrated } from '@/lib/useHydrated'
+import { useOnline } from '@/lib/useOnline'
 import { isApiConfigured } from '@/lib/api/config'
 import {
   fetchDeviceSettings,
@@ -147,6 +148,7 @@ function SegmentedField<T extends string>({
 
 export default function SettingsContent() {
   const hydrated = useHydrated()
+  const online = useOnline()
   const { pushToast } = useSensors()
 
   const [intervalInput, setIntervalInput] = useState<string>('')
@@ -199,7 +201,8 @@ export default function SettingsContent() {
     if (sync?.pending !== true || !isApiConfigured()) return
 
     const id = setInterval(() => {
-      void fetchDeviceSettings()
+      // Poll must observe the board's real sync state, not the cached snapshot.
+      void fetchDeviceSettings({ fresh: true })
         .then((remote) => {
           if (remote) setSync(remote.sync)
         })
@@ -222,6 +225,10 @@ export default function SettingsContent() {
     cameraEnabled !== remoteBaseline.camera
 
   const saveDevice = () => {
+    if (!online) {
+      pushToast('Unavailable offline', 'Reconnect to send device settings.', 'WARNING')
+      return
+    }
     if (!isApiConfigured()) {
       setRemoteBaseline({
         interval: intervalInput,
@@ -281,9 +288,9 @@ export default function SettingsContent() {
   }
 
   const refreshSync = () => {
-    if (!isApiConfigured()) return
+    if (!online || !isApiConfigured()) return
 
-    void fetchDeviceSettings()
+    void fetchDeviceSettings({ fresh: true })
       .then((remote) => {
         if (remote) setSync(remote.sync)
       })
@@ -308,6 +315,7 @@ export default function SettingsContent() {
         dirty={deviceDirty}
         valid={deviceIntervalValid}
         sync={sync}
+        offline={!online}
         onIntervalChange={setIntervalInput}
         onCameraChange={setCameraEnabled}
         onSave={saveDevice}
@@ -466,9 +474,11 @@ function AccessibilitySection() {
 
 function SyncBanner({
   sync,
+  offline,
   onRefresh,
 }: {
   sync: DeviceSyncStatus | null
+  offline: boolean
   onRefresh: () => void
 }) {
   const pending = sync?.pending ?? null
@@ -524,7 +534,9 @@ function SyncBanner({
       <button
         type="button"
         onClick={onRefresh}
-        className="btn-ghost btn-sm shrink-0"
+        disabled={offline}
+        title={offline ? 'Reconnect to refresh device status' : undefined}
+        className="btn-ghost btn-sm shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
       >
         REFRESH STATUS
       </button>
@@ -538,6 +550,7 @@ function DeviceReportingSection({
   dirty,
   valid,
   sync,
+  offline,
   onIntervalChange,
   onCameraChange,
   onSave,
@@ -548,6 +561,7 @@ function DeviceReportingSection({
   dirty: boolean
   valid: boolean
   sync: DeviceSyncStatus | null
+  offline: boolean
   onIntervalChange: (value: string) => void
   onCameraChange: (value: boolean) => void
   onSave: () => void
@@ -567,7 +581,7 @@ function DeviceReportingSection({
       </p>
 
       <div className="mt-4">
-        <SyncBanner sync={sync} onRefresh={onRefresh} />
+        <SyncBanner sync={sync} offline={offline} onRefresh={onRefresh} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
@@ -587,6 +601,7 @@ function DeviceReportingSection({
               placeholder="firmware default"
               value={intervalInput}
               onChange={(e) => onIntervalChange(e.target.value)}
+              readOnly={offline}
               aria-label="Cloud reporting interval in seconds"
               aria-invalid={!valid}
               aria-describedby="reporting-interval-help"
@@ -624,8 +639,9 @@ function DeviceReportingSection({
             aria-checked={cameraOn}
             aria-label="Camera enabled"
             onClick={() => onCameraChange(!cameraOn)}
+            disabled={offline}
             className={
-              'relative w-11 h-6 rounded-full transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-(--focus-ring) focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) ' +
+              'relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-(--focus-ring) focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) ' +
               (cameraOn
                 ? 'bg-(--secondary-color)'
                 : 'bg-white/15 border border-white/40')
@@ -645,17 +661,22 @@ function DeviceReportingSection({
         <button
           type="button"
           onClick={onSave}
-          disabled={!valid || !dirty}
+          disabled={!valid || !dirty || offline}
+          title={offline ? 'Reconnect to make changes' : undefined}
           className="btn-primary btn-md min-w-32 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           SAVE DEVICE SETTINGS
         </button>
 
-        {dirty && (
+        {offline ? (
+          <span className="text-xs font-semibold text-(--amber-indicator)">
+            Offline — settings are read-only
+          </span>
+        ) : dirty ? (
           <span className="text-xs font-semibold text-amber-400">
             Unsaved changes
           </span>
-        )}
+        ) : null}
       </div>
     </section>
   )
@@ -664,6 +685,7 @@ function DeviceReportingSection({
 function DeviceManagementSection() {
   const { devices, refresh } = useDevices()
   const { pushToast } = useSensors()
+  const online = useOnline()
 
   const [residences, setResidences] = useState<ResidenceEntry[]>([])
   const [hardwareId, setHardwareId] = useState('')
@@ -701,7 +723,7 @@ function DeviceManagementSection() {
     (residenceChoice !== 'new' || newAddress.trim().length > 0)
 
   const submitRegister = async () => {
-    if (!isApiConfigured() || !canRegister || registering) return
+    if (!online || !isApiConfigured() || !canRegister || registering) return
 
     const submittedId = hardwareId.trim()
 
@@ -806,7 +828,7 @@ function DeviceManagementSection() {
   }
 
   const removeDevice = (device: { id: number; name: string }) => {
-    if (!isApiConfigured()) {
+    if (!online || !isApiConfigured()) {
       setConfirmDeleteId(null)
       return
     }
@@ -909,7 +931,8 @@ function DeviceManagementSection() {
         <button
           type="button"
           onClick={() => void submitRegister()}
-          disabled={!canRegister || registering}
+          disabled={!canRegister || registering || !online}
+          title={online ? undefined : 'Reconnect to register a device'}
           className="btn-primary btn-md min-w-32 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {registering ? 'REGISTERING…' : 'REGISTER DEVICE'}
@@ -1033,7 +1056,8 @@ function DeviceManagementSection() {
 
                   <button
                     onClick={() => removeDevice(d)}
-                    className="btn-ghost btn-sm text-(--red-indicator)"
+                    disabled={!online}
+                    className="btn-ghost btn-sm text-(--red-indicator) disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     DELETE
                   </button>
@@ -1048,8 +1072,10 @@ function DeviceManagementSection() {
               ) : (
                 <button
                   onClick={() => setConfirmDeleteId(d.id)}
+                  disabled={!online}
                   aria-label={`Remove ${d.name}`}
-                  className="btn-icon btn-sm text-(--red-indicator) shrink-0"
+                  title={online ? undefined : 'Reconnect to remove a device'}
+                  className="btn-icon btn-sm text-(--red-indicator) shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M3 6h18" />
@@ -1077,6 +1103,7 @@ type PushStatus =
 
 function BrowserNotificationsSection() {
   const hydrated = useHydrated()
+  const online = useOnline()
   const configured = isPushConfigured()
 
   const [status, setStatus] = useState<PushStatus>('disabled')
@@ -1094,6 +1121,7 @@ function BrowserNotificationsSection() {
   }, [hydrated])
 
   const handleEnable = () => {
+    if (!online) return
     setStatus('enabling')
     setNotice(null)
 
@@ -1109,6 +1137,7 @@ function BrowserNotificationsSection() {
   }
 
   const handleDisable = () => {
+    if (!online) return
     setStatus('disabling')
     setNotice(null)
 
@@ -1141,7 +1170,8 @@ function BrowserNotificationsSection() {
           <button
             type="button"
             onClick={handleDisable}
-            disabled={busy}
+            disabled={busy || !online}
+            title={online ? undefined : 'Reconnect to change push settings'}
             className="btn-outline btn-md min-w-32 disabled:opacity-40"
           >
             {busy ? 'DISABLING…' : 'DISABLE BROWSER NOTIFICATIONS'}
@@ -1150,7 +1180,8 @@ function BrowserNotificationsSection() {
           <button
             type="button"
             onClick={handleEnable}
-            disabled={busy || !configured}
+            disabled={busy || !configured || !online}
+            title={online ? undefined : 'Reconnect to change push settings'}
             className="btn-primary btn-md min-w-32 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {busy ? 'ENABLING…' : 'ENABLE BROWSER NOTIFICATIONS'}

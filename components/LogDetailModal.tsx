@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import Image from 'next/image'
 import { lockScroll } from '@/lib/scrollLock'
 import { useFocusTrap } from '@/lib/useFocusTrap'
+import { useOnline } from '@/lib/useOnline'
 import type {
   LogEntry,
   CaptureEntry,
@@ -31,7 +32,7 @@ interface Props {
   onClose: () => void
 }
 
-type LoadState = 'loading' | 'ready' | 'missing' | 'error'
+type LoadState = 'loading' | 'ready' | 'missing' | 'error' | 'offline'
 
 function DetailItem({
   label,
@@ -290,6 +291,7 @@ function EventEvidence({
   const [refreshError, setRefreshError] = useState(false)
   const [captureState, setCaptureState] = useState<LoadState>('loading')
   const [readingState, setReadingState] = useState<LoadState>('loading')
+  const online = useOnline()
 
   useEffect(() => {
     let cancelled = false
@@ -300,6 +302,14 @@ function EventEvidence({
 
     // Deferred into an async function so the reset setState calls aren't synchronous in the effect body.
     const load = async (refresh = false) => {
+      if (!online) {
+        // Evidence is fetched live and deliberately never cached (auth images).
+        // Keep anything already loaded and say why the rest cannot be fetched.
+        setReadingState((prev) => (prev === 'ready' ? prev : 'offline'))
+        setCaptureState((prev) => (prev === 'ready' ? prev : 'offline'))
+        return
+      }
+
       let eventRefreshFailed = false
       if (!deviceCode) {
         if (deviceState === 'error') {
@@ -315,7 +325,7 @@ function EventEvidence({
 
       if (refresh && currentEvent.eventStatus === 'active') {
         try {
-          const events = await fetchLogs({ deviceId: deviceCode })
+          const events = await fetchLogs({ deviceId: deviceCode }, { fresh: true })
           const updated = events.find((event) => event.eventId === log.eventId)
           if (cancelled) return
           if (updated) {
@@ -374,17 +384,25 @@ function EventEvidence({
       cancelled = true
       clearTimeout(refreshTimer)
     }
-  }, [deviceCode, deviceState, log.timestamp, log.endTime, log.eventStatus, log.eventId, onEventUpdate, log])
+  }, [deviceCode, deviceState, log.timestamp, log.endTime, log.eventStatus, log.eventId, onEventUpdate, log, online])
 
   return (
     <>
       <section className="mt-6">
-        <SectionHeading title="Why the device alerted" meta={log.eventStatus === 'active' ? 'Refreshing every 10 s' : undefined} />
+        <SectionHeading
+          title="Why the device alerted"
+          meta={!online ? 'OFFLINE' : log.eventStatus === 'active' ? 'Refreshing every 10 s' : undefined}
+        />
         {refreshError && <p role="status" className="mb-3 text-sm text-(--amber-indicator)">Refresh failed. The last loaded evidence remains visible.</p>}
         {readingState === 'loading' && <ReadingSkeleton />}
         {readingState === 'error' && (
           <p role="alert" className="text-sm text-(--red-indicator)">
             Could not load the sensor reading for this event.
+          </p>
+        )}
+        {readingState === 'offline' && (
+          <p role="status" className="text-sm text-(--amber-indicator)">
+            Offline — event readings need a connection. Last saved evidence stays visible where available.
           </p>
         )}
         {readingState === 'missing' && (
@@ -418,6 +436,11 @@ function EventEvidence({
         {captureState === 'error' && (
           <p role="alert" className="text-sm text-(--red-indicator) text-center">
             Could not retrieve camera snapshots for this device.
+          </p>
+        )}
+        {captureState === 'offline' && (
+          <p role="status" className="text-sm text-(--amber-indicator) text-center">
+            Offline — camera snapshots are unavailable until you reconnect.
           </p>
         )}
         {captureState === 'missing' && (

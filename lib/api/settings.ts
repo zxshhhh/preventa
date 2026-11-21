@@ -1,5 +1,6 @@
 import { SENSORS, HUMIDITY_CONFIG } from '@/lib/dashboardData'
 import { apiGet, apiPatch } from './client'
+import { CACHE_TAGS, CACHE_TTL, cachedFetch, invalidateTags } from './cache'
 import { ENDPOINTS } from './endpoints'
 
 export type CalibrationMetric = 'temperature' | 'humidity' | 'gas' | 'power'
@@ -123,9 +124,21 @@ function toRemoteState(device: DeviceConfig): DeviceRemoteState {
   }
 }
 
-export async function fetchDeviceSettings(): Promise<DeviceRemoteState | null> {
-  const device = await fetchDeviceDetail()
-  return device ? toRemoteState(device) : null
+/** `fresh: true` bypasses the cache for device-sync polling and manual refresh. */
+export function fetchDeviceSettings(options?: { fresh?: boolean }): Promise<DeviceRemoteState | null> {
+  return cachedFetch(
+    'device-settings',
+    async () => {
+      const device = await fetchDeviceDetail()
+      return device ? toRemoteState(device) : null
+    },
+    {
+      ...CACHE_TTL.settings,
+      persist: true,
+      tags: [CACHE_TAGS.settings],
+      fresh: options?.fresh,
+    },
+  )
 }
 
 export async function saveDeviceSettings(save: DeviceSettingsSave): Promise<DeviceRemoteState | null> {
@@ -148,6 +161,7 @@ export async function saveDeviceSettings(save: DeviceSettingsSave): Promise<Devi
   }
 
   const data = await apiPatch<DeviceConfig>(ENDPOINTS.updateDevice(device.id), body)
+  invalidateTags([CACHE_TAGS.settings])
   return data ? toRemoteState(data) : null
 }
 
