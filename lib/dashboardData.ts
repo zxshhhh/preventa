@@ -20,8 +20,10 @@ export interface SensorConfig {
 
 export interface SeriesPoint {
   label: string
-  value: number
+  value: number | null
   t?: number
+  /** True when this bucket had no device reading in the selected window. */
+  gap?: boolean
 }
 
 export interface SensorSeries {
@@ -143,9 +145,63 @@ export function formatRangeLabel(ts: number, range: TrendRange): string {
   return clockLabel(d)
 }
 
+export const NO_DATA_GAP_MESSAGE = 'No data gathered from the device in this time range'
+
+export interface WindowedSeriesPoint extends SeriesPoint {
+  t: number
+  value: number | null
+  gap: boolean
+}
+
+export interface RangeWindow {
+  start: number
+  end: number
+}
+
+export function bucketWindow(points: SeriesPoint[], range: TrendRange, window: RangeWindow): WindowedSeriesPoint[] {
+  const bucketCount = BUCKET_COUNT[range]
+  const start = window.start
+  const end = window.end
+  const span = Math.max(end - start, 1)
+  const size = span / bucketCount
+
+  const sums = new Array<number>(bucketCount).fill(0)
+  const counts = new Array<number>(bucketCount).fill(0)
+
+  for (const p of points) {
+    if (typeof p.t !== 'number' || !Number.isFinite(p.t)) continue
+    if (typeof p.value !== 'number' || !Number.isFinite(p.value)) continue
+    if (p.t < start || p.t > end) continue
+    const idx = Math.min(bucketCount - 1, Math.max(0, Math.floor((p.t - start) / size)))
+    sums[idx] += p.value
+    counts[idx] += 1
+  }
+
+  const out: WindowedSeriesPoint[] = []
+  for (let i = 0; i < bucketCount; i++) {
+    const t = Math.round(start + (i + 0.5) * size)
+    const hasData = counts[i] > 0
+    out.push({
+      t,
+      label: formatRangeLabel(t, range),
+      value: hasData ? sums[i] / counts[i] : null,
+      gap: !hasData,
+    })
+  }
+
+  return out
+}
+
+/**
+ * Legacy data-span bucketing kept for non-chart callers that still need compacted
+ * numeric series. Chart rendering should use bucketWindow for fixed windows/gaps.
+ */
 export function bucketPoints(points: SeriesPoint[], range: TrendRange): SeriesPoint[] {
-  const timed = points.filter((p): p is SeriesPoint & { t: number } => typeof p.t === 'number' && Number.isFinite(p.t))
-  if (timed.length < 2) return points
+  const timed = points.filter(
+    (p): p is SeriesPoint & { t: number; value: number } =>
+      typeof p.t === 'number' && Number.isFinite(p.t) && typeof p.value === 'number' && Number.isFinite(p.value),
+  )
+  if (timed.length < 2) return timed
 
   const sorted = [...timed].sort((a, b) => a.t - b.t)
   const start = sorted[0].t
@@ -170,7 +226,7 @@ export function bucketPoints(points: SeriesPoint[], range: TrendRange): SeriesPo
     if (value === null) continue
     carry = value
     const t = Math.round(start + i * size)
-    out.push({ t, value, label: formatRangeLabel(t, range)})
+    out.push({ t, value, label: formatRangeLabel(t, range) })
   }
 
   return out
@@ -200,14 +256,35 @@ export function formatNumber(value: number, decimals: number): string {
   return Number.isFinite(value) ? fmt.format(value) : '-'
 }
 
+function realPoints(points: SeriesPoint[]): Array<SeriesPoint & { value: number; t: number }> {
+  return points.filter(
+    (p): p is SeriesPoint & { value: number; t: number } =>
+      typeof p.value === 'number' && Number.isFinite(p.value) && typeof p.t === 'number' && Number.isFinite(p.t),
+  )
+}
+
+export function firstRealPoint(points: SeriesPoint[]): (SeriesPoint & { value: number; t: number }) | null {
+  return realPoints(points)[0] ?? null
+}
+
+export function lastRealPoint(points: SeriesPoint[]): (SeriesPoint & { value: number; t: number }) | null {
+  const real = realPoints(points)
+  return real[real.length - 1] ?? null
+}
+
+export function hasRealData(points: SeriesPoint[]): boolean {
+  return points.some((p) => typeof p.value === 'number' && Number.isFinite(p.value))
+}
+
 /**
- * Percent change from the FIRST point of a window to the last one —
- * the card delta chip is anchored to the trending chart's first dot.
+ * Percent change from the first real reading in a fixed window to the last real one.
+ * Missing/gap buckets are ignored so gaps do not fake continuity.
  */
 export function deltaFromFirst(points: SeriesPoint[]): number {
-  if (points.length < 2) return 0
-  const first = points[0].value
-  const last = points[points.length - 1].value
+  const real = realPoints(points)
+  if (real.length < 2) return 0
+  const first = real[0].value
+  const last = real[real.length - 1].value
   if (!Number.isFinite(first) || !Number.isFinite(last) || first === 0) return 0
   return ((last - first) / Math.abs(first)) * 100
 }
@@ -290,29 +367,53 @@ export function chartGeom(
   const innerW = W - M.left - M.right
   const innerH = H - M.top - M.bottom
 
-  const values = points.map((p) => p.value)
-  const dataMin = Math.min(...values)
-  const dataMax = Math.max(...values)
+  const values = points
+    .map((p) => p.value)
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+  const dataMin = values.length ? Math.min(...values) : 0
+  const dataMax = values.length ? Math.max(...values) : 1
 
-  const pad =
-    (dataMax - dataMin) * 0.14 ||
-    Math.max(dataMax * 0.05, 1)
+  const pad = (dataMax - dataMin) * 0.14 || Math.max(Math.abs(dataMax) * 0.05, 1)
 
   const ymin = fixedRange?.min ?? dataMin - pad
   const ymax = fixedRange?.max ?? dataMax + pad
+  const safeSpan = ymax - ymin || 1
 
-  const xAt = (i: number) =>
-    M.left +
-    (points.length > 1
-      ? (i / (points.length - 1)) * innerW
-      : 0)
+  const xAt = (i: number) => M.left + (points.length > 1 ? (i / (points.length - 1)) * innerW : innerW / 2)
 
-  const yAt = (v: number) =>
-    M.top +
-    innerH -
-    ((v - ymin) / (ymax - ymin)) * innerH
+  const yAt = (v: number) => M.top + innerH - ((v - ymin) / safeSpan) * innerH
 
   return { xAt, yAt, ymin, ymax }
+}
+
+export function contiguousSegments(points: SeriesPoint[]): Array<Array<SeriesPoint & { value: number }>> {
+  const segments: Array<Array<SeriesPoint & { value: number }>> = []
+  let current: Array<SeriesPoint & { value: number }> = []
+  for (const p of points) {
+    if (typeof p.value === 'number' && Number.isFinite(p.value)) {
+      current.push(p as SeriesPoint & { value: number })
+    } else if (current.length) {
+      segments.push(current)
+      current = []
+    }
+  }
+  if (current.length) segments.push(current)
+  return segments
+}
+
+export function gapRanges(points: SeriesPoint[]): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = []
+  let start: number | null = null
+  for (let i = 0; i < points.length; i++) {
+    const missing = !(typeof points[i].value === 'number' && Number.isFinite(points[i].value))
+    if (missing && start === null) start = i
+    if (!missing && start !== null) {
+      ranges.push({ start, end: i - 1 })
+      start = null
+    }
+  }
+  if (start !== null) ranges.push({ start, end: points.length - 1 })
+  return ranges
 }
 
 

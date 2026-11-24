@@ -1,12 +1,12 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-import type { SensorSeries, TrendRange } from '@/lib/dashboardData'
-import { bucketPoints } from '@/lib/dashboardData'
+import { useEffect, useMemo, useState } from 'react'
+import type { TrendRange, RangeWindow } from '@/lib/dashboardData'
+import { RANGE_MS, bucketWindow, hasRealData } from '@/lib/dashboardData'
 import { isApiConfigured } from '@/lib/api/config'
 import { CACHE_TAGS, CACHE_TTL } from '@/lib/api/cache'
 import { useCachedQuery } from '@/lib/api/useCachedQuery'
-import { fetchRangeRaw } from '@/lib/api/telemetry'
+import { fetchRangeRaw, type RangeSnapshot } from '@/lib/api/telemetry'
 import { useSensors } from '@/context/useSensors'
 import DashboardHeader from '@/components/DashboardHeader'
 import RecentReportLog from '@/components/RecentReportLog'
@@ -17,10 +17,21 @@ const RANGE_REFRESH_MS = 60_000
 export default function DashboardContent() {
   const { series, liveSavedAt } = useSensors()
   const [range, setRange] = useState<TrendRange>('1H')
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 5000)
+    return () => clearInterval(id)
+  }, [])
+
+  const liveWindow = useMemo<RangeWindow>(() => {
+    const end = now
+    return { start: end - RANGE_MS['1H'], end }
+  }, [now])
 
   // Historical ranges come from the in-memory API cache; the hook re-runs the
   // cached fetch on the existing 60 s cadence and re-renders when it refreshes.
-  const { data: remoteSeries, savedAt: savedRangeAt } = useCachedQuery<SensorSeries[]>(
+  const { data: remoteSnapshot, savedAt: savedRangeAt, refreshing } = useCachedQuery<RangeSnapshot>(
     range === '1H' ? null : `range:${range}`,
     () => fetchRangeRaw(range),
     {
@@ -31,32 +42,36 @@ export default function DashboardContent() {
     },
   )
 
-  // LIVE is the WebSocket buffer itself: every streamed reading (~2s cadence)
-  // renders the moment it arrives. The provider keeps it filled — a one-time
-  // hour seed on mount plus the live stream — so no time-based fetch here.
+  // LIVE is a fixed 1-hour window over the real-time WS buffer. Missing buckets
+  // are explicit gaps (no carry-fill/stretching).
   const liveChart = useMemo(
-    () => series.map((s) => ({ id: s.id, points: bucketPoints(s.points, '1H')})),
-    [series]
+    () => series.map((s) => ({ id: s.id, points: bucketWindow(s.points, '1H', liveWindow) })),
+    [series, liveWindow],
   )
 
   const chartSeries = useMemo(() => {
     if (range === '1H') return liveChart
 
-    // Historical ranges chart the fetched backend window; live WS readings
-    // newer than the last fetched point are merged in so the tail ticks in
-    // real time between the 60s refreshes. Merge on raw points, bucket once.
-    const base = remoteSeries
-    if (!base || !base.length) return []
-    return base.map((s) => {
-      const lastT = s.points.length ? s.points[s.points.length - 1].t ?? 0 : 0
+    const base = remoteSnapshot
+    if (!base) return []
+    return base.series.map((s) => {
       const live = series.find((l) => l.id === s.id)?.points ?? []
-      const fresh = live.filter((p) => typeof p.t === 'number' && p.t > lastT)
+      const window: RangeWindow = base.window
+      const inWindowLive = live.filter(
+        (p) => typeof p.t === 'number' && p.t >= window.start && p.t <= window.end,
+      )
+      // Merge live readings inside the fixed window so the tail can advance between
+      // refreshes; bucketWindow keeps missing buckets as explicit gaps.
       return {
         id: s.id,
-        points: bucketPoints(fresh.length ? [...s.points, ...fresh] : s.points, range),
+        points: bucketWindow([...s.points, ...inWindowLive], range, window),
       }
     })
-  }, [remoteSeries, range, series, liveChart])
+  }, [remoteSnapshot, range, series, liveChart])
+
+  const chartWindow: RangeWindow | null = range === '1H' ? liveWindow : remoteSnapshot?.window ?? null
+  const chartEmpty = chartSeries.length > 0 && chartSeries.every((s) => !hasRealData(s.points))
+  const chartResolved = range === '1H' ? chartSeries.length > 0 : remoteSnapshot !== null
 
   return (
     <div className="flex flex-col gap-6">
@@ -68,6 +83,9 @@ export default function DashboardContent() {
         range={range}
         onRangeChange={setRange}
         cachedAt={range === '1H' ? liveSavedAt : savedRangeAt}
+        window={chartWindow}
+        empty={chartResolved && chartEmpty}
+        refreshing={range !== '1H' && refreshing}
       />
     </div>
   )

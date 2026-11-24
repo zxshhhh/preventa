@@ -1,13 +1,17 @@
 ﻿'use client'
 
 import { useCallback, useEffect, useId, useRef, type ReactNode } from 'react'
-import type { SensorId, SeriesPoint, StatusLevel } from '@/lib/dashboardData'
+import type { SensorId, SeriesPoint, StatusLevel, RangeWindow, TrendRange } from '@/lib/dashboardData'
 import {
-  CHART_VIEW,
   CHART_RANGES,
+  CHART_VIEW,
+  NO_DATA_GAP_MESSAGE,
   buildTicks,
   chartGeom,
+  contiguousSegments,
   formatNumber,
+  gapRanges,
+  lastRealPoint,
   smoothPath,
 } from '@/lib/dashboardData'
 import { useChartHoverApi } from './ChartHoverProvider'
@@ -38,6 +42,10 @@ interface Props {
   thresholdNominal: number
   thresholdWarning: number
   icon?: ReactNode
+  window: RangeWindow | null
+  range: TrendRange
+  hasAnyData: boolean
+  lastReadingLabel?: string
 }
 
 /** Status pill styling keyed by label; signal colors match the design tokens. */
@@ -63,20 +71,28 @@ export default function DashboardMetricCard({
   thresholdNominal,
   thresholdWarning,
   icon,
+  window,
+  range,
+  hasAnyData,
+  lastReadingLabel,
 }: Props) {
   const gid = useId().replace(/:/g, '')
   const svgRef = useRef<SVGSVGElement>(null)
   const { setHover, scheduleClear, register } = useChartHoverApi()
 
-  // Skeleton state: no plottable series yet (initial fetch, empty feed).
-  const hasData = chartPoints.length >= 2
+  void window
+  void range
+  const hasSeries = chartPoints.length > 1
+  const realLast = lastRealPoint(chartPoints)
+  const geom = hasSeries ? chartGeom(chartPoints, CHART_RANGES[id]) : null
 
-  const geom = hasData ? chartGeom(chartPoints, CHART_RANGES[id]) : null
-
-  const fillPct = Math.min(100, ((hasData ? chartPoints[chartPoints.length - 1].value : 0) / thresholdWarning) * 100)
+  const fillPct = Math.min(
+    100,
+    Math.max(0, ((realLast?.value ?? 0) / thresholdWarning) * 100),
+  )
 
   const isUp = delta >= 0
-  const last = hasData ? chartPoints[chartPoints.length - 1] : null
+  void window
 
   const gridTicks = geom ? buildTicks(geom.ymin, geom.ymax, 4) : []
   const xAxisY = M.top + INNER_H
@@ -106,14 +122,14 @@ export default function DashboardMetricCard({
   const indexFromClientX = useCallback(
     (clientX: number): number | null => {
       const svg = svgRef.current
-      if (!svg || !hasData) return null
+      if (!svg || !hasSeries) return null
       const rect = svg.getBoundingClientRect()
       if (!rect.width) return null
       const userX = ((clientX - rect.left) / rect.width) * W
       const idx = Math.round(((userX - M.left) / INNER_W) * (chartPoints.length - 1))
       return Math.max(0, Math.min(idx, chartPoints.length - 1))
     },
-    [hasData, chartPoints.length],
+    [hasSeries, chartPoints.length],
   )
 
   const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -136,14 +152,14 @@ export default function DashboardMetricCard({
   const onTouchEnd = () => scheduleClear(2500)
 
   const onFocus = () => {
-    if (hasData && lastIndexRef.current === null) applyHover(chartPoints.length - 1)
+    if (hasSeries && lastIndexRef.current === null) applyHover(chartPoints.length - 1)
   }
   const onBlur = () => {
     if (lastIndexRef.current !== null) applyHover(null)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<SVGSVGElement>) => {
-    if (!hasData) return
+    if (!hasSeries) return
     const len = chartPoints.length
     const base = lastIndexRef.current ?? len - 1
     let next: number | null = null
@@ -162,21 +178,30 @@ export default function DashboardMetricCard({
   const getRect = useCallback(() => svgRef.current?.getBoundingClientRect() ?? null, [])
   useEffect(() => register(id, getRect), [register, id, getRect])
 
-  const lineD = geom
-    ? smoothPath(chartPoints.map((p, i) => ({ x: geom.xAt(i), y: geom.yAt(p.value) })))
-    : ''
-  const areaD =
-    geom && hasData
-      ? lineD +
-        ` L ${geom.xAt(chartPoints.length - 1)} ${xAxisY} L ${geom.xAt(0)} ${xAxisY} Z`
-      : ''
+  const segments = hasSeries ? contiguousSegments(chartPoints) : []
+  const gaps = hasSeries ? gapRanges(chartPoints) : []
+  const segmentPaths = geom
+    ? segments.map((seg) => {
+        const pts = seg.map((p) => {
+          const index = chartPoints.indexOf(p)
+          return { x: geom.xAt(index), y: geom.yAt(p.value) }
+        })
+        const line = smoothPath(pts)
+        const firstIdx = chartPoints.indexOf(seg[0])
+        const lastIdx = chartPoints.indexOf(seg[seg.length - 1])
+        const area = `${line} L ${geom.xAt(lastIdx)} ${xAxisY} L ${geom.xAt(firstIdx)} ${xAxisY} Z`
+        return { line, area }
+      })
+    : []
 
   const statusClass = STATUS_CLASS[status.label] ?? 'text-gray-400 bg-white/5'
   const deltaClass = isUp ? 'text-rose-400 bg-rose-400/10' : 'text-emerald-400 bg-emerald-400/10'
 
-  // Newest-dot marker (screen coords via the shared geometry).
-  const lastX = geom && last ? geom.xAt(chartPoints.length - 1) : 0
-  const lastY = geom && last ? geom.yAt(last.value) : 0
+  // Newest real reading marker (screen coords via the shared geometry).
+  const lastRealIdx = realLast ? chartPoints.indexOf(realLast) : -1
+  const lastX = geom && lastRealIdx >= 0 ? geom.xAt(lastRealIdx) : 0
+  const lastY = geom && realLast ? geom.yAt(realLast.value) : 0
+  const gapPatternId = `${gid}-gap`
 
   return (
     <div className="panel-card p-5 flex flex-col gap-4">
@@ -203,8 +228,9 @@ export default function DashboardMetricCard({
             <span className="text-sm font-bold text-gray-400">{unit}</span>
           </div>
           <div className="flex items-center gap-1.5 mt-2">
-            {hasData ? (
+            {hasAnyData ? (
               <>
+                {lastReadingLabel ? <span className="text-xs font-semibold text-gray-400">{lastReadingLabel}</span> : null}
                 <span className={`tnum flex items-center gap-0.5 text-xs font-extrabold px-2 py-0.5 rounded-full ${deltaClass}`}>
                   {isUp ? (
                     <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -220,6 +246,8 @@ export default function DashboardMetricCard({
                 </span>
                 <span className="text-xs font-semibold text-gray-400">{deltaLabel}</span>
               </>
+            ) : hasSeries ? (
+              <span className="text-xs font-semibold text-gray-500">{NO_DATA_GAP_MESSAGE}</span>
             ) : (
               <span className="text-xs font-semibold text-gray-500">Loading readings</span>
             )}
@@ -227,7 +255,7 @@ export default function DashboardMetricCard({
         </div>
       </div>
       <div className="relative">
-        {!hasData ? (
+        {!hasSeries ? (
           // Ghost chart: fixed placeholder wave in the same viewBox and margins
           // as the real chart so the swap-in causes no layout jump.
           <div className="skeleton-shine rounded-lg" aria-hidden="true">
@@ -264,7 +292,7 @@ export default function DashboardMetricCard({
             viewBox={`0 0 ${W} ${H}`}
             className="w-full h-auto block select-none touch-none rounded-lg focus-visible:ring-2 focus-visible:ring-(--focus-ring)"
             role="img"
-            aria-label={`${title} trend, ${chartPoints.length} readings. Use the left and right arrow keys to inspect each reading.`}
+            aria-label={`${title} trend, fixed window. ${hasAnyData ? 'Use left and right arrow keys to inspect each reading.' : NO_DATA_GAP_MESSAGE}`}
             tabIndex={0}
             onMouseMove={onMove}
             onMouseLeave={onLeave}
@@ -280,7 +308,21 @@ export default function DashboardMetricCard({
                 <stop offset="0%" stopColor={color} stopOpacity="0.28" />
                 <stop offset="100%" stopColor={color} stopOpacity="0" />
               </linearGradient>
+              <pattern id={gapPatternId} patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)">
+                <rect width="8" height="8" fill="rgba(148,163,184,0.08)" />
+                <line x1="0" y1="0" x2="0" y2="8" stroke="rgba(148,163,184,0.35)" strokeWidth="2" />
+              </pattern>
             </defs>
+            {gaps.map((gap) => {
+              const x1 = geom.xAt(gap.start) - (chartPoints.length > 1 ? INNER_W / (chartPoints.length - 1) / 2 : INNER_W / 2)
+              const x2 = geom.xAt(gap.end) + (chartPoints.length > 1 ? INNER_W / (chartPoints.length - 1) / 2 : INNER_W / 2)
+              return (
+                <g key={`${gap.start}-${gap.end}`}>
+                  <rect x={Math.max(M.left, x1)} y={M.top} width={Math.min(W - M.right, x2) - Math.max(M.left, x1)} height={INNER_H} fill={`url(#${gapPatternId})`} />
+                  <rect x={Math.max(M.left, x1)} y={M.top} width={Math.min(W - M.right, x2) - Math.max(M.left, x1)} height={INNER_H} fill="rgba(100,116,139,0.08)" />
+                </g>
+              )
+            })}
             {gridTicks.map((t) => (
               <line
                 key={t}
@@ -301,35 +343,27 @@ export default function DashboardMetricCard({
               strokeWidth="1"
             />
             {gridTicks.map((t) => (
-              <text
-                key={t}
-                x={M.left - 3}
-                y={geom.yAt(t)}
-                textAnchor="end"
-                dominantBaseline="central"
-                fontSize="8"
-                fill="var(--chart-axis)"
-              >
+              <text key={`y-${t}`} x={M.left - 3} y={geom.yAt(t)} textAnchor="end" dominantBaseline="central" fontSize="8" fill="var(--chart-axis)">
                 {fmt(t)}
               </text>
             ))}
             {labelIdx.map((i) => (
-              <text
-                key={i}
-                x={geom.xAt(i)}
-                y={xAxisY + 10}
-                textAnchor={labelAnchor(i)}
-                fontSize="8"
-                fill="var(--chart-axis)"
-              >
+              <text key={i} x={geom.xAt(i)} y={xAxisY + 10} textAnchor={labelAnchor(i)} fontSize="8" fill="var(--chart-axis)">
                 {chartPoints[i].label}
               </text>
             ))}
-            {areaD && <path d={areaD} fill={`url(#${gid})`} />}
-            {lineD && (
-              <path d={lineD} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            {segmentPaths.map((seg, i) => (
+              <path key={`area-${i}`} d={seg.area} fill={`url(#${gid})`} />
+            ))}
+            {segmentPaths.map((seg, i) => (
+              <path key={`line-${i}`} d={seg.line} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            ))}
+            {!hasAnyData && (
+              <text x={W / 2} y={M.top + INNER_H / 2} textAnchor="middle" fontSize="10" fill="var(--chart-axis)">
+                {NO_DATA_GAP_MESSAGE}
+              </text>
             )}
-            {last && geom && (
+            {realLast && geom && lastRealIdx >= 0 && (
               <g>
                 {pulse && <circle className="dot-ping" cx={lastX} cy={lastY} r="4" fill={color} />}
                 <circle cx={lastX} cy={lastY} r="8" fill={color} opacity="0.18" />

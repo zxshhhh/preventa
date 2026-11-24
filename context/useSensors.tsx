@@ -294,18 +294,19 @@ export function SensorProvider({ children }: { children: ReactNode }) {
     // purely from the WebSocket stream — this is the only time-based fetch for LIVE.
     async function seedHour() {
       try {
-        const hour = await fetchRangeRaw('1H')
+        const snapshot = await fetchRangeRaw('1H')
         if (cancelled) return
         let changed = false
-        for (const s of hour) {
+        for (const s of snapshot.series) {
           if (!s.points.length) continue
           const buf = buffersRef.current[s.id]
-          const seedLastT = s.points.length ? s.points[s.points.length - 1].t ?? 0 : 0
+          const seedPoints = s.points.filter((p) => typeof p.t === 'number' && Number.isFinite(p.t))
+          const seedLastT = seedPoints.length ? seedPoints[seedPoints.length - 1].t ?? 0 : 0
           // Keep snapshot/live points newer than the seed's tail — this covers
           // both a WS race and a restored snapshot after an offline reload.
           const fresh = buf.filter((p) => typeof p.t === 'number' && (!seedLastT || p.t > seedLastT))
           // Seed is ascending; append preserved live tail so order is maintained.
-          const merged = [...s.points.filter((p) => typeof p.t === 'number' && (!seedLastT || p.t <= seedLastT)), ...fresh]
+          const merged = [...seedPoints.filter((p) => typeof p.t === 'number' && (!seedLastT || p.t <= seedLastT)), ...fresh]
           if (merged.length) {
             buffersRef.current[s.id] = merged.slice(-MAX_BUFFER)
             changed = true

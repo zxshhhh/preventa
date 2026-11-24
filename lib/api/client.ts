@@ -83,6 +83,7 @@ interface RequestOptions {
   headers?: Record<string, string>
   timeout?: number
   _retry?: boolean
+  signal?: AbortSignal
 }
 
 function safeParse(text: string): unknown {
@@ -165,6 +166,11 @@ async function refreshAccessToken(): Promise<string | null> {
 async function request<T>(path: string, init: RequestInit, options: RequestOptions = {}): Promise<T> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), options.timeout ?? API_TIMEOUT_MS)
+  const onAbort = () => controller.abort()
+  if (options.signal) {
+    if (options.signal.aborted) controller.abort()
+    else options.signal.addEventListener('abort', onAbort, { once: true })
+  }
 
   const headers = new Headers(options.headers)
   if (init.body !== undefined && !headers.has('Content-Type')) {
@@ -184,11 +190,13 @@ async function request<T>(path: string, init: RequestInit, options: RequestOptio
     })
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
+      if (options.signal?.aborted) throw err
       throw new ApiError(`Request timed out after ${options.timeout ?? API_TIMEOUT_MS}ms`, 0)
     }
     throw new ApiError('Network error — could not reach the API', 0)
   } finally {
     clearTimeout(timer)
+    options.signal?.removeEventListener('abort', onAbort)
   }
 
   if (response.status === 204) return undefined as T

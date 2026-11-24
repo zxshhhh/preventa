@@ -3,12 +3,15 @@ import { useOnline, formatSavedAt } from '@/lib/useOnline'
 import DashboardMetricCard from './ui/DashboardMetricCard'
 import ChartHoverOverlay from './ui/ChartHoverOverlay'
 import { ChartHoverProvider, useChartHoverApi } from './ui/ChartHoverProvider'
-import type { SensorId, SensorSeries, SeriesPoint, StatusLevel, TrendRange } from '@/lib/dashboardData'
+import type { SensorId, SensorSeries, SeriesPoint, StatusLevel, TrendRange, RangeWindow } from '@/lib/dashboardData'
 import {
   CARD_ORDER,
+  NO_DATA_GAP_MESSAGE,
   SENSORS,
   deltaFromFirst,
   formatNumber,
+  hasRealData,
+  lastRealPoint,
   levelFor,
   rangeDeltaText,
 } from '@/lib/dashboardData'
@@ -65,6 +68,8 @@ interface CardData {
   statusText: string
   thresholdNominal: number
   thresholdWarning: number
+  hasAnyData: boolean
+  lastReadingLabel?: string
 }
 
 /** Range switches invalidate the hovered bucket — drop the selection. */
@@ -83,9 +88,22 @@ interface Props {
   onRangeChange: (r: TrendRange) => void
   /** Timestamp of the saved snapshot currently shown (live or historical). */
   cachedAt?: number | null
+  window: RangeWindow | null
+  /** True when the selected fixed window has resolved with no real readings. */
+  empty: boolean
+  refreshing?: boolean
 }
 
-export default function DashboardSensorCards({ series, chartSeries, range, onRangeChange, cachedAt }: Props) {
+export default function DashboardSensorCards({
+  series,
+  chartSeries,
+  range,
+  onRangeChange,
+  cachedAt,
+  window,
+  empty,
+  refreshing,
+}: Props) {
   const online = useOnline()
   // Re-evaluate feed freshness on a tick so the dot flips to red even when no
   // new readings arrive (and trigger no re-render otherwise). `now` starts at 0
@@ -111,33 +129,35 @@ export default function DashboardSensorCards({ series, chartSeries, range, onRan
   }
   const liveFeed = online && now > 0 && lastReadingT > 0 && now - lastReadingT <= LIVE_STALE_MS
 
-  // Every number on the cards is derived from the SAME bucketed series the
-  // trend chart plots: headline = newest dot, delta = first dot → newest dot.
+  // Card values are anchored to real readings inside the selected fixed window.
+  // Gap buckets (value null) are rendered as gray diagonal no-data gaps.
   const cards: CardData[] = CARD_ORDER.map((id) => {
     const cfg = SENSORS[id]
     const chartPoints = chartSeries.find((x) => x.id === id)?.points ?? []
-    const hasData = chartPoints.length >= 2
-    const last = hasData ? chartPoints[chartPoints.length - 1] : null
-    const current = last?.value ?? 0
+    const anyData = hasRealData(chartPoints)
+    const lastReal = lastRealPoint(chartPoints)
+    const tailGap = anyData && lastReal && chartPoints.length > 0 && chartPoints[chartPoints.length - 1]?.value == null
 
     return {
       id,
       icon: ICONS[id],
       title: cfg.name,
-      value: last ? formatNumber(current, cfg.decimals) : '-',
+      value: lastReal ? formatNumber(lastReal.value, cfg.decimals) : '-',
       unit: cfg.unit,
       decimals: cfg.decimals,
-      delta: hasData ? deltaFromFirst(chartPoints) : 0,
+      delta: anyData ? deltaFromFirst(chartPoints) : 0,
       deltaLabel: rangeDeltaText(range),
-      pulse: range === '1H' && liveFeed,
+      pulse: range === '1H' && liveFeed && !tailGap,
       chartPoints,
       color: cfg.color,
-      status: last
-        ? levelFor(cfg, current)
+      status: lastReal
+        ? levelFor(cfg, lastReal.value)
         : { level: 'NOMINAL' as StatusLevel, color: 'var(--info-indicator)', label: 'NO DATA' },
       statusText: `WARNING > ${formatNumber(cfg.thresholdWarning, 0)} ${cfg.unit}`,
       thresholdNominal: cfg.thresholdNominal,
       thresholdWarning: cfg.thresholdWarning,
+      hasAnyData: anyData,
+      lastReadingLabel: tailGap ? 'Last reading' : undefined,
     }
   })
 
@@ -180,14 +200,20 @@ export default function DashboardSensorCards({ series, chartSeries, range, onRan
             ))}
           </div>
         </div>
-        {!online && range !== '1H' && chartSeries.every((s) => s.points.length === 0) && (
+        {!online && range !== '1H' && chartSeries.every((s) => s.points.length === 0) && !empty && (
           <p role="status" className="text-sm text-(--amber-indicator)">
             No saved data for this range. Reconnect once to save it for offline use.
           </p>
         )}
+        {empty && (
+          <p role="status" className="text-sm text-gray-400">
+            {NO_DATA_GAP_MESSAGE}
+            {refreshing ? ' Checking for readings…' : ''}
+          </p>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-5">
           {cards.map(({ id, ...d }) => (
-            <DashboardMetricCard key={id} id={id} {...d} />
+            <DashboardMetricCard key={id} id={id} {...d} window={window} range={range} />
           ))}
         </div>
       </div>

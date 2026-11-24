@@ -63,8 +63,9 @@ export default function NotificationModal({ show, onClose }: Props) {
     SENSORS,
   ) as SensorId[]).flatMap((id) => {
     const cfg = SENSORS[id]
-    const point = series.find((s) => s.id === id)?.points.at(-1)
-    if (!point) return []
+    const points = series.find((s) => s.id === id)?.points ?? []
+    const point = [...points].reverse().find((p) => typeof p.value === 'number' && Number.isFinite(p.value))
+    if (!point || typeof point.value !== 'number') return []
     const status = levelFor(cfg, point.value)
     if (status.level === 'NOMINAL') return []
     return [

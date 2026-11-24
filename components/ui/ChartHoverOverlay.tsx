@@ -4,9 +4,10 @@ import { useEffect, useReducer, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import type { SensorSeries, TrendRange } from '@/lib/dashboardData'
 import {
-  CHART_RANGES,
   CARD_ORDER,
+  CHART_RANGES,
   CHART_VIEW,
+  NO_DATA_GAP_MESSAGE,
   SENSORS,
   alignedIndex,
   chartGeom,
@@ -81,10 +82,7 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
 
   if (!mounted || !hover) return null
 
-  const hoveredSeries = chartSeries.find(
-    (s) => s.id === hover.cardId,
-  )
-
+  const hoveredSeries = chartSeries.find((s) => s.id === hover.cardId)
   if (!hoveredSeries || hoveredSeries.points.length < 2) return null
 
   const hoverLen = hoveredSeries.points.length
@@ -92,19 +90,9 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
   const hoveredPoint = hoveredSeries.points[hi]
   const hoverT = hoveredPoint.t
 
-  const hoveredGeom = chartGeom(
-    hoveredSeries.points,
-    CHART_RANGES[hover.cardId],
-  )
-
+  const hoveredGeom = chartGeom(hoveredSeries.points, CHART_RANGES[hover.cardId])
   const hoveredRect = api.getRect(hover.cardId)
-
-  if (
-    !hoveredGeom ||
-    !hoveredRect ||
-    !hoveredRect.width ||
-    !hoveredRect.height
-  ) return null
+  if (!hoveredGeom || !hoveredRect || !hoveredRect.width || !hoveredRect.height) return null
 
   const toScreen = (
     geom: { xAt: (i: number) => number; yAt: (v: number) => number },
@@ -116,51 +104,49 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
     y: rect.top + (geom.yAt(v) / CHART_VIEW.H) * rect.height,
   })
 
-  const { x, y } = toScreen(
-    hoveredGeom,
-    hi,
-    hoveredPoint.value,
-    hoveredRect,
-  )
+  const hoveredValue =
+    typeof hoveredPoint.value === 'number' && Number.isFinite(hoveredPoint.value)
+      ? hoveredPoint.value
+      : hoveredGeom.ymin
+  const { x, y } = toScreen(hoveredGeom, hi, hoveredValue, hoveredRect)
 
   const rows = CARD_ORDER.flatMap((id) => {
     const series = chartSeries.find((s) => s.id === id)
-
     if (!series || !series.points.length) return []
 
-    const ai = alignedIndex(
-      series.points,
-      hoverT,
-      hi,
-      hoverLen,
-    )
-
+    const ai = alignedIndex(series.points, hoverT, hi, hoverLen)
     if (ai < 0) return []
 
     const geom = chartGeom(series.points, CHART_RANGES[id])
     const rect = api.getRect(id)
-
     if (!geom || !rect || !rect.width || !rect.height) return []
 
     const p = series.points[ai]
     const cfg = SENSORS[id]
+    const missing = !(typeof p.value === 'number' && Number.isFinite(p.value))
+    const valueForY = missing ? geom.ymin : (p.value as number)
 
-    return [{
-      id,
-      name: cfg.name,
-      unit: cfg.unit,
-      color: cfg.color,
-      label: formatNumber(p.value, cfg.decimals),
-      ...toScreen(geom, ai, p.value, rect),
-      active: id === hover.cardId,
-    }]
+    return [
+      {
+        id,
+        name: cfg.name,
+        unit: cfg.unit,
+        color: cfg.color,
+        missing,
+        label: missing ? 'No data' : formatNumber(p.value as number, cfg.decimals),
+        ...toScreen(geom, ai, valueForY, rect),
+        active: id === hover.cardId,
+      },
+    ]
   })
 
   const timestamp = formatFullTimestamp(hoverT, range)
   const hoveredCfg = SENSORS[hover.cardId]
+  const hoveredMissing = !(typeof hoveredPoint.value === 'number' && Number.isFinite(hoveredPoint.value))
 
-  const announce =
-    `${hoveredCfg.name} ${formatNumber(hoveredPoint.value, hoveredCfg.decimals)} ${hoveredCfg.unit}, ${timestamp}`
+  const announce = hoveredMissing
+    ? `${hoveredCfg.name}, ${NO_DATA_GAP_MESSAGE}, ${timestamp}`
+    : `${hoveredCfg.name} ${formatNumber(hoveredPoint.value as number, hoveredCfg.decimals)} ${hoveredCfg.unit}, ${timestamp}`
 
   const vw = window.innerWidth
   const vh = window.innerHeight
@@ -219,25 +205,23 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
               transform: 'translate(-50%, -50%)',
             }}
           >
-            {r.active && (
+            {r.active && !r.missing && (
               <span
                 className="absolute inset-0 animate-ping rounded-full"
-                style={{
-                  backgroundColor: r.color,
-                  opacity: 0.35,
-                }}
+                style={{ backgroundColor: r.color, opacity: 0.35 }}
               />
             )}
 
             <span
               className={
-                'relative block rounded-full border-2 border-white ' +
-                (r.active ? 'h-4 w-4' : 'h-3.5 w-3.5')
+                'relative block rounded-full border-2 ' +
+                (r.active ? 'h-4 w-4 ' : 'h-3.5 w-3.5 ') +
+                (r.missing ? 'border-gray-400/70' : 'border-white')
               }
               style={{
-                backgroundColor: r.color,
+                backgroundColor: r.missing ? 'rgba(148,163,184,0.35)' : r.color,
                 boxShadow: r.active
-                  ? `0 0 0 5px color-mix(in srgb, ${r.color} 25%, transparent), 0 4px 14px rgba(0,0,0,0.45)`
+                  ? `0 0 0 5px color-mix(in srgb, ${r.missing ? '#94a3b8' : r.color} 25%, transparent), 0 4px 14px rgba(0,0,0,0.45)`
                   : '0 2px 8px rgba(0,0,0,0.4)',
               }}
             />
@@ -260,6 +244,9 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
                 </p>
               </div>
             </div>
+            {hoveredMissing && (
+              <p className="mt-2 text-xs font-semibold text-gray-300">{NO_DATA_GAP_MESSAGE}</p>
+            )}
             <div className="mt-2 sm:mt-3 space-y-1">
               {rows.map((r) => (
                 <div
@@ -271,13 +258,13 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
                 >
                   <span
                     className="h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: r.color }}
+                    style={{ backgroundColor: r.missing ? 'rgba(148,163,184,0.7)' : r.color }}
                   />
                   <span className="min-w-0 truncate text-xs font-semibold text-gray-400">
                     {r.name}
                   </span>
-                  <span className="tnum ml-auto text-sm sm:text-base font-extrabold text-gray-100">
-                    {r.label}
+                  <span className={`ml-auto text-sm sm:text-base font-extrabold ${r.missing ? 'text-gray-400 text-xs sm:text-xs' : 'tnum text-gray-100'}`}>
+                    {r.missing ? 'No data in this time range' : r.label}
                   </span>
                   <span className="w-12 shrink-0 text-right text-xs font-bold text-gray-500">
                     {r.unit}

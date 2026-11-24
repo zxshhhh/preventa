@@ -50,6 +50,12 @@ export interface CacheOptions<T> {
   fresh?: boolean
   /** Applied only when writing to localStorage (e.g. cap the persisted log history). */
   storageTransform?: (value: T) => unknown
+  /**
+   * Abort the underlying fetch. Aborts are not cached as failures and do not
+   * evict an existing good value. If a request is already in-flight, the caller
+   * waits for that single-flight result.
+   */
+  signal?: AbortSignal
 }
 
 interface Entry {
@@ -275,7 +281,7 @@ function refresh<T>(fullKey: string, key: string, fetcher: () => Promise<T>, opt
  * in the background. Offline (or on a network-level failure) the last saved
  * value is served regardless of TTL — no fetcher is started while offline.
  */
-export function cachedFetch<T>(key: string, fetcher: () => Promise<T>, options: CacheOptions<T>): Promise<T> {
+export function cachedFetch<T>(key: string, fetcher: (signal?: AbortSignal) => Promise<T>, options: CacheOptions<T>): Promise<T> {
   const fullKey = scoped(key)
   const entry = loadEntry(fullKey, options)
   const age = entry ? Date.now() - entry.storedAt : Number.POSITIVE_INFINITY
@@ -287,13 +293,17 @@ export function cachedFetch<T>(key: string, fetcher: () => Promise<T>, options: 
   if (entry && !options.fresh && age < entry.ttlMs) return Promise.resolve(entry.value as T)
 
   if (entry && !options.fresh && age < entry.staleMs) {
-    void refresh(fullKey, key, fetcher, options).catch(() => {
+    void refresh(fullKey, key, () => fetcher(undefined), options).catch(() => {
       /* keep the stale value; the next call retries */
     })
     return Promise.resolve(entry.value as T)
   }
 
-  return refresh(fullKey, key, fetcher, options).catch((err) => {
+  const pending = inflight.get(fullKey)
+  if (pending) return pending as Promise<T>
+
+  return refresh(fullKey, key, () => fetcher(options.signal), options).catch((err) => {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err
     // A network failure must not replace good saved data with an error screen.
     const saved = memory.get(fullKey)
     if (saved && isNetworkFailure(err)) return saved.value as T
