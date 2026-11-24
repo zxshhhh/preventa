@@ -6,6 +6,7 @@ import type {
 
 import { apiGet, apiBlob } from './client'
 import { CACHE_TAGS, CACHE_TTL, cachedFetch } from './cache'
+import { cachedBlob } from './blobCache'
 import { ENDPOINTS } from './endpoints'
 import { EVENT_LOOKBACK_MS, EVENT_RECOVERY_MS } from '@/lib/eventEvidence'
 
@@ -240,12 +241,19 @@ async function fetchAllEventPages(
 }
 
 /**
+ * Cache key for the unfiltered log list. `useCachedQuery` on the log screen
+ * uses this same key so a manual refresh bypasses the cache end to end.
+ */
+export const LOGS_CACHE_KEY = `logs::`
+
+/**
  * Loads fire events. The assembled (all-pages) result is cached; persistence is
  * capped to the newest 200 entries so a long event history cannot fill storage.
+ * `raw: true` skips this cache for callers that cache the result themselves.
  */
 export function fetchLogs(
   filters?: LogFilters,
-  options?: { fresh?: boolean },
+  options?: { fresh?: boolean; raw?: boolean },
 ): Promise<LogEntry[]> {
   const key = `logs:${filters?.deviceId ?? ''}:${filters?.status ?? ''}`
   const params = new URLSearchParams()
@@ -262,6 +270,8 @@ export function fetchLogs(
   const path = qs
     ? `${ENDPOINTS.events}?${qs}`
     : ENDPOINTS.events
+
+  if (options?.raw) return fetchAllEventPages(path)
 
   return cachedFetch(key, () => fetchAllEventPages(path), {
     ...CACHE_TTL.logs,
@@ -299,25 +309,45 @@ export function fetchDeviceCode(
 
       return String(device.device_id)
     },
-    { ...CACHE_TTL.deviceCode, tags: [CACHE_TAGS.devices] },
+    {
+      ...CACHE_TTL.deviceCode,
+      persist: true,
+      tags: [CACHE_TAGS.devices],
+    },
   )
+}
+
+/** Cache key for an event's reading window. Active events share one stable entry. */
+export function eventReadingsCacheKey(
+  deviceCode: string,
+  eventStart: string,
+  eventEnd?: string | null,
+): string {
+  return `event-readings:${deviceCode}:${eventStart}:${eventEnd ?? 'active'}`
+}
+
+/** Cache key for a device's capture metadata. */
+export function capturesCacheKey(deviceCode: string): string {
+  return `captures:${deviceCode}`
 }
 
 /**
  * Loads readings for a specific device and event time window.
  *
  * Include two minutes before the trigger and one minute after resolution.
- * Active events end at the current time.
+ * Active events end at the current time; the cache entry is keyed by event
+ * identity (not by that moving end) so an active-event refresh overwrites it.
  */
-export async function fetchEventReadings(
+export function fetchEventReadings(
   deviceCode: string,
   eventStart: string,
   eventEnd?: string | null,
+  options?: { fresh?: boolean },
 ): Promise<ReadingEntry[]> {
   const startDate = new Date(eventStart)
 
   if (Number.isNaN(startDate.getTime())) {
-    throw new Error('Invalid event start timestamp.')
+    return Promise.reject(new Error('Invalid event start timestamp.'))
   }
 
   startDate.setTime(startDate.getTime() - EVENT_LOOKBACK_MS)
@@ -325,7 +355,7 @@ export async function fetchEventReadings(
   const endDate = eventEnd ? new Date(eventEnd) : new Date()
 
   if (Number.isNaN(endDate.getTime())) {
-    throw new Error('Invalid event end timestamp.')
+    return Promise.reject(new Error('Invalid event end timestamp.'))
   }
   if (eventEnd) endDate.setTime(Math.min(Date.now(), endDate.getTime() + EVENT_RECOVERY_MS))
 
@@ -335,23 +365,41 @@ export async function fetchEventReadings(
     end: endDate.toISOString(),
   })
 
-  return fetchAllReadingPages(
-    `${ENDPOINTS.readings}?${params.toString()}`,
+  return cachedFetch(
+    eventReadingsCacheKey(deviceCode, eventStart, eventEnd),
+    () => fetchAllReadingPages(`${ENDPOINTS.readings}?${params.toString()}`),
+    {
+      ...CACHE_TTL.eventReadings,
+      persist: true,
+      tags: [CACHE_TAGS.evidence],
+      fresh: options?.fresh,
+      storageTransform: (readings) => readings.slice(0, 300),
+    },
   )
 }
 
 /**
- * Loads all captures for a hardware device, following pagination.
+ * Loads all captures for a hardware device, following pagination. The
+ * normalized list is cached (and persisted) so reopening a log is instant.
  */
-export async function fetchCaptures(
+export function fetchCaptures(
   deviceCode: string,
+  options?: { fresh?: boolean },
 ): Promise<CaptureEntry[]> {
   const params = new URLSearchParams({
     device_id: deviceCode,
   })
 
-  return fetchAllCapturePages(
-    `${ENDPOINTS.captures}?${params.toString()}`,
+  return cachedFetch(
+    capturesCacheKey(deviceCode),
+    () => fetchAllCapturePages(`${ENDPOINTS.captures}?${params.toString()}`),
+    {
+      ...CACHE_TTL.captures,
+      persist: true,
+      tags: [CACHE_TAGS.evidence],
+      fresh: options?.fresh,
+      storageTransform: (captures) => captures.slice(0, 300),
+    },
   )
 }
 
@@ -439,14 +487,12 @@ export function findEventReading(
 }
 
 /**
- * Fetches an image through the authenticated route using the
- * user's Bearer token and returns a blob object URL.
- *
- * The component using this URL must revoke it when finished.
+ * Fetches an image through the authenticated route using the user's Bearer
+ * token. The blob is cached in memory + IndexedDB; callers create/revoke their
+ * own object URL so no stale URL survives a modal close or a browser reload.
  */
-export async function fetchCaptureImage(
+export function fetchCaptureBlob(
   id: string | number,
-): Promise<string> {
-  const blob = await apiBlob(ENDPOINTS.captureImage(id))
-  return URL.createObjectURL(blob)
+): Promise<Blob> {
+  return cachedBlob(id, () => apiBlob(ENDPOINTS.captureImage(id)))
 }

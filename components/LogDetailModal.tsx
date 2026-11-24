@@ -20,9 +20,13 @@ import {
   fetchCaptures,
   findCapturesNearEvent,
   findEventReading,
-  fetchCaptureImage,
+  fetchCaptureBlob,
   fetchLogs,
+  eventReadingsCacheKey,
+  capturesCacheKey,
 } from '@/lib/api/reports'
+import { peekCache } from '@/lib/api/cache'
+import { peekBlob } from '@/lib/api/blobCache'
 import { formatNumber } from '@/lib/dashboardData'
 import EventTimeline from '@/components/EventTimeline'
 import { EVENT_RECOVERY_MS, findTriggerReading, sortEventReadings } from '@/lib/eventEvidence'
@@ -97,6 +101,13 @@ const READING_FIELDS = [
   { label: 'HUMIDITY', unit: '%', keys: ['smooth_humidity', 'humidity'] },
   { label: 'CURRENT', unit: 'A', keys: ['smooth_current'] },
 ] as const
+
+function closestEventReading(
+  ordered: ReadingEntry[],
+  eventStart: string,
+): ReadingEntry | null {
+  return findTriggerReading(ordered, eventStart) ?? findEventReading(ordered, eventStart)
+}
 
 function readingValue(
   values: Record<string, unknown>,
@@ -200,17 +211,21 @@ function CaptureImage({
     let cancelled = false
     let objectUrl: string | null = null
 
+    // Blob bytes may already be cached in memory (or IndexedDB from a previous
+    // visit); an object URL must still be created for this mount.
+    const cached = peekBlob(capture.id)
+
     const load = async () => {
       try {
-        const url = await fetchCaptureImage(capture.id)
+        // Yield once so a cache hit doesn't call setState in the effect body.
+        await Promise.resolve()
+        const blob = cached ?? await fetchCaptureBlob(capture.id)
+        if (cancelled) return
 
-        if (cancelled) {
-          URL.revokeObjectURL(url)
-          return
+        if (!objectUrl) {
+          objectUrl = URL.createObjectURL(blob)
+          setImageUrl(objectUrl)
         }
-
-        objectUrl = url
-        setImageUrl(url)
         setState('ready')
       } catch {
         if (!cancelled) {
@@ -285,31 +300,71 @@ function EventEvidence({
   deviceState: LoadState
   onEventUpdate: (event: LogEntry) => void
 }) {
-  const [captures, setCaptures] = useState<CaptureEntry[]>([])
-  const [reading, setReading] = useState<ReadingEntry | null>(null)
-  const [readings, setReadings] = useState<ReadingEntry[]>([])
+  const readingsKey = deviceCode
+    ? eventReadingsCacheKey(deviceCode, log.timestamp, log.endTime)
+    : null
+  const capturesKey = deviceCode ? capturesCacheKey(deviceCode) : null
+  const cachedReadings = readingsKey ? peekCache<ReadingEntry[]>(readingsKey) : undefined
+  const cachedCaptures = capturesKey ? peekCache<CaptureEntry[]>(capturesKey) : undefined
+  const initialReadings = cachedReadings ? sortEventReadings(cachedReadings) : []
+  const initialCaptures = cachedCaptures
+    ? findCapturesNearEvent(cachedCaptures, log.timestamp, log.endTime)
+    : []
+
+  const [captures, setCaptures] = useState<CaptureEntry[]>(initialCaptures)
+  const [reading, setReading] = useState<ReadingEntry | null>(
+    () => closestEventReading(initialReadings, log.timestamp),
+  )
+  const [readings, setReadings] = useState<ReadingEntry[]>(initialReadings)
   const [refreshError, setRefreshError] = useState(false)
-  const [captureState, setCaptureState] = useState<LoadState>('loading')
-  const [readingState, setReadingState] = useState<LoadState>('loading')
+  const [captureState, setCaptureState] = useState<LoadState>(
+    cachedCaptures ? (initialCaptures.length > 0 ? 'ready' : 'missing') : 'loading',
+  )
+  const [readingState, setReadingState] = useState<LoadState>(
+    cachedReadings ? (reading ? 'ready' : 'missing') : 'loading',
+  )
   const online = useOnline()
+
+  // The parent replaces LogEntry objects when the log list refreshes, so the
+  // effect below is keyed on primitive event fields rather than object identity.
+  const eventRef = useRef(log)
+  useEffect(() => {
+    eventRef.current = log
+  })
+  const onEventUpdateRef = useRef(onEventUpdate)
+  useEffect(() => {
+    onEventUpdateRef.current = onEventUpdate
+  }, [onEventUpdate])
 
   useEffect(() => {
     let cancelled = false
     let refreshTimer: ReturnType<typeof setTimeout> | undefined
-    let currentEvent = log
+    let currentEvent = eventRef.current
     let loadedReadings = false
     let loadedCaptures = false
 
-    // Deferred into an async function so the reset setState calls aren't synchronous in the effect body.
-    const load = async (refresh = false) => {
-      if (!online) {
-        // Evidence is fetched live and deliberately never cached (auth images).
-        // Keep anything already loaded and say why the rest cannot be fetched.
-        setReadingState((prev) => (prev === 'ready' ? prev : 'offline'))
-        setCaptureState((prev) => (prev === 'ready' ? prev : 'offline'))
-        return
-      }
+    const applyReadings = (rows: ReadingEntry[]) => {
+      const ordered = sortEventReadings(rows)
+      const closest = closestEventReading(ordered, currentEvent.timestamp)
+      setReadings(ordered)
+      setReading(closest)
+      setReadingState(closest ? 'ready' : 'missing')
+    }
 
+    const applyCaptures = (rows: CaptureEntry[]) => {
+      const nearby = findCapturesNearEvent(
+        rows,
+        currentEvent.timestamp,
+        currentEvent.endTime,
+      )
+      setCaptures(nearby)
+      setCaptureState(nearby.length > 0 ? 'ready' : 'missing')
+    }
+
+    // Deferred into an async function so cache-hit setState calls aren't
+    // synchronous in the effect body.
+    const load = async (refresh = false) => {
+      await Promise.resolve()
       let eventRefreshFailed = false
       if (!deviceCode) {
         if (deviceState === 'error') {
@@ -323,17 +378,43 @@ function EventEvidence({
         return
       }
 
+      const rKey = eventReadingsCacheKey(deviceCode, currentEvent.timestamp, currentEvent.endTime)
+      const cKey = capturesCacheKey(deviceCode)
+
+      // Seed synchronously from the cache so re-opening an event shows saved
+      // evidence immediately, with no skeleton and no request.
+      if (!loadedReadings) {
+        const cached = peekCache<ReadingEntry[]>(rKey)
+        if (cached) {
+          applyReadings(cached)
+          loadedReadings = true
+        }
+      }
+      if (!loadedCaptures) {
+        const cached = peekCache<CaptureEntry[]>(cKey)
+        if (cached) {
+          applyCaptures(cached)
+          loadedCaptures = true
+        }
+      }
+
+      if (!online) {
+        setReadingState((prev) => (prev === 'ready' || prev === 'missing' ? prev : 'offline'))
+        setCaptureState((prev) => (prev === 'ready' || prev === 'missing' ? prev : 'offline'))
+        return
+      }
+
       if (refresh && currentEvent.eventStatus === 'active') {
         try {
           const events = await fetchLogs({ deviceId: deviceCode }, { fresh: true })
-          const updated = events.find((event) => event.eventId === log.eventId)
+          const updated = events.find((event) => event.eventId === currentEvent.eventId)
           if (cancelled) return
           if (updated) {
             const changed = updated.eventStatus !== currentEvent.eventStatus ||
               updated.peakTier !== currentEvent.peakTier || updated.endTime !== currentEvent.endTime ||
               updated.peakFireType !== currentEvent.peakFireType
             currentEvent = updated
-            if (changed) onEventUpdate(updated)
+            if (changed) onEventUpdateRef.current(updated)
           }
         } catch {
           eventRefreshFailed = true
@@ -341,34 +422,24 @@ function EventEvidence({
       }
       if (cancelled) return
       const [readingResult, captureResult] = await Promise.allSettled([
-        fetchEventReadings(deviceCode, currentEvent.timestamp, currentEvent.endTime),
-        fetchCaptures(deviceCode),
+        fetchEventReadings(deviceCode, currentEvent.timestamp, currentEvent.endTime, { fresh: refresh }),
+        fetchCaptures(deviceCode, { fresh: refresh }),
       ])
 
       if (cancelled) return
 
       if (readingResult.status === 'fulfilled') {
-        const ordered = sortEventReadings(readingResult.value)
-        const closest = findTriggerReading(ordered, currentEvent.timestamp) ?? findEventReading(ordered, currentEvent.timestamp)
-        setReadings(ordered)
-        setReading(closest)
-        setReadingState(closest ? 'ready' : 'missing')
+        applyReadings(readingResult.value)
         loadedReadings = true
-      } else {
-        if (!loadedReadings) setReadingState('error')
+      } else if (!loadedReadings) {
+        setReadingState('error')
       }
 
       if (captureResult.status === 'fulfilled') {
-        const nearby = findCapturesNearEvent(
-          captureResult.value,
-          currentEvent.timestamp,
-          currentEvent.endTime,
-        )
-        setCaptures(nearby)
-        setCaptureState(nearby.length > 0 ? 'ready' : 'missing')
+        applyCaptures(captureResult.value)
         loadedCaptures = true
-      } else {
-        if (!loadedCaptures) setCaptureState('error')
+      } else if (!loadedCaptures) {
+        setCaptureState('error')
       }
 
       if (refresh) setRefreshError(eventRefreshFailed || readingResult.status === 'rejected' || captureResult.status === 'rejected')
@@ -384,7 +455,7 @@ function EventEvidence({
       cancelled = true
       clearTimeout(refreshTimer)
     }
-  }, [deviceCode, deviceState, log.timestamp, log.endTime, log.eventStatus, log.eventId, onEventUpdate, log, online])
+  }, [deviceCode, deviceState, log.timestamp, log.endTime, log.eventStatus, log.eventId, online])
 
   return (
     <>
@@ -468,8 +539,13 @@ export default function LogDetailModal({ log, onClose }: Props) {
   const [refreshedEvent, setCurrentEvent] = useState<LogEntry | null>(null)
   const currentEvent = refreshedEvent && refreshedEvent.eventId === log.eventId &&
     refreshedEvent.timestamp === log.timestamp ? refreshedEvent : log
-  const [deviceCode, setDeviceCode] = useState<string | null>(null)
-  const [deviceState, setDeviceState] = useState<LoadState>('loading')
+  const cachedDeviceCode = log.deviceId
+    ? peekCache<string>(`device-code:${log.deviceId}`)
+    : undefined
+  const [deviceCode, setDeviceCode] = useState<string | null>(cachedDeviceCode ?? null)
+  const [deviceState, setDeviceState] = useState<LoadState>(
+    cachedDeviceCode ? 'ready' : log.deviceId ? 'loading' : 'missing',
+  )
 
   const panelRef = useRef<HTMLDivElement>(null)
 
@@ -482,9 +558,6 @@ export default function LogDetailModal({ log, onClose }: Props) {
 
     // Deferred into an async function so the reset setState calls aren't synchronous in the effect body.
     const load = async () => {
-      setDeviceCode(null)
-      setDeviceState('loading')
-
       if (!log.deviceId) {
         setDeviceState('missing')
         return

@@ -2,10 +2,13 @@
  * API-layer cache: TTL + single-flight dedupe + optional localStorage persistence.
  *
  * Domain modules cache their *normalized* results (never raw paginated responses).
- * Live WebSocket telemetry, capture blobs, auth and one-time setup keys are never
- * cached here. Persistence is versioned, user-scoped and best-effort — quota or
- * storage errors only disable persistence; the in-memory cache keeps working.
+ * Live WebSocket telemetry, auth and one-time setup keys are never cached here;
+ * capture image bytes live in the separate blobCache (IndexedDB). Persistence is
+ * versioned, user-scoped and best-effort — quota or storage errors only disable
+ * persistence; the in-memory cache keeps working.
  */
+import { getCacheScope } from './cacheScope'
+import { clearBlobCache } from './blobCache'
 
 const PREFIX = 'preventa.api-cache.v1'
 const MAX_ENTRIES = 50
@@ -29,6 +32,7 @@ export const CACHE_TAGS = {
   profile: 'profile',
   settings: 'settings',
   baselines: 'baselines',
+  evidence: 'evidence',
 } as const
 
 export const CACHE_TTL = {
@@ -39,6 +43,8 @@ export const CACHE_TTL = {
   settings: { ttlMs: 120_000, staleMs: 600_000 },
   baselines: { ttlMs: 300_000, staleMs: 1_800_000 },
   deviceCode: { ttlMs: 3_600_000, staleMs: 86_400_000 },
+  eventReadings: { ttlMs: 300_000, staleMs: 1_800_000 },
+  captures: { ttlMs: 300_000, staleMs: 1_800_000 },
 } as const
 
 export interface CacheOptions<T> {
@@ -88,35 +94,12 @@ const inflight = new Map<string, Promise<unknown>>()
 const listeners = new Map<string, Set<Listener>>()
 let generation = 0
 
-/** Stable per-user scope. Username is set at login and survives token refresh. */
-function scope(): string {
-  if (typeof window === 'undefined') return 'anon'
-  try {
-    const username = localStorage.getItem('preventa.username')?.trim()
-    if (username) return `u:${username.toLowerCase()}`
-    const token = localStorage.getItem('preventa.token')
-    if (token) {
-      // Legacy sessions without a stored username: a compact deterministic hash
-      // keeps persisted entries from mixing users without storing the JWT itself.
-      let h = 2166136261
-      for (let i = 0; i < token.length; i++) {
-        h ^= token.charCodeAt(i)
-        h = Math.imul(h, 16777619)
-      }
-      return `t:${(h >>> 0).toString(36)}`
-    }
-  } catch {
-    /* storage unavailable */
-  }
-  return 'anon'
-}
-
 function scoped(key: string): string {
-  return `${scope()}|${key}`
+  return `${getCacheScope()}|${key}`
 }
 
 function plainKey(fullKey: string): string {
-  const prefix = `${scope()}|`
+  const prefix = `${getCacheScope()}|`
   return fullKey.startsWith(prefix) ? fullKey.slice(prefix.length) : fullKey
 }
 
@@ -130,7 +113,7 @@ function readPersisted(fullKey: string): PersistedEntry | null {
     const raw = localStorage.getItem(storageKey(fullKey))
     if (!raw) return null
     const parsed = JSON.parse(raw) as PersistedEntry
-    if (parsed?.v !== 1 || parsed.scope !== scope()) return null
+    if (parsed?.v !== 1 || parsed.scope !== getCacheScope()) return null
     return parsed
   } catch {
     return null
@@ -184,7 +167,7 @@ function persistEntry<T>(fullKey: string, entry: Entry, options: CacheOptions<T>
   try {
     const payload: PersistedEntry = {
       v: 1,
-      scope: scope(),
+      scope: getCacheScope(),
       savedAt: entry.storedAt,
       value: options.storageTransform ? options.storageTransform(entry.value as T) : entry.value,
       tags: entry.tags,
@@ -364,7 +347,7 @@ export function invalidateTags(tags: string[]): void {
   }
 
   // Persisted entries may not have been loaded into memory this session.
-  const scopePrefix = `${scope()}|`
+  const scopePrefix = `${getCacheScope()}|`
   for (const storageFullKey of storedKeys()) {
     const keyPath = storageFullKey.slice(PREFIX.length + 1)
     if (!keyPath.startsWith(scopePrefix)) continue
@@ -380,6 +363,7 @@ export function clearApiCache(): void {
   generation++
   memory.clear()
   inflight.clear()
+  clearBlobCache()
   for (const key of storedKeys()) {
     try {
       localStorage.removeItem(key)

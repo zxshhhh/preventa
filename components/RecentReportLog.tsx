@@ -1,16 +1,18 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useHydrated } from '@/lib/useHydrated'
 import { useOnline } from '@/lib/useOnline'
 import { isApiConfigured } from '@/lib/api/config'
-import { CACHE_TAGS, CACHE_TTL } from '@/lib/api/cache'
+import { CACHE_TAGS, CACHE_TTL, peekCache } from '@/lib/api/cache'
 import { useCachedQuery } from '@/lib/api/useCachedQuery'
 import {
   fetchLogs,
   fetchDeviceCode,
   fetchEventReadings,
   findEventReading,
+  eventReadingsCacheKey,
+  LOGS_CACHE_KEY,
 } from '@/lib/api/reports'
 import { formatTime } from '@/lib/logReport'
 import { formatNumber } from '@/lib/dashboardData'
@@ -48,6 +50,19 @@ function formatDate(ts: string): string {
 
 function reportKey(log: LogEntry): string {
   return log.eventId != null ? String(log.eventId) : `${log.timestamp}:${log.deviceId ?? 'na'}`
+}
+
+/** Reuse readings already saved by this screen or the report-log detail modal. */
+function cachedReportReading(log: LogEntry): ReportReading | null {
+  if (log.deviceId == null) return { state: 'missing', reading: null }
+  const code = peekCache<string>(`device-code:${log.deviceId}`)
+  if (!code) return null
+  const readings = peekCache<ReadingEntry[]>(
+    eventReadingsCacheKey(code, log.timestamp, log.endTime),
+  )
+  if (!readings) return null
+  const closest = findEventReading(readings, log.timestamp)
+  return { state: closest ? 'ready' : 'missing', reading: closest }
 }
 
 function readingDisplayValue(values: Record<string, unknown>, keys: readonly string[]): string {
@@ -151,15 +166,15 @@ function ReportCardSkeleton() {
 export default function RecentReportLog() {
   const hydrated = useHydrated()
   const online = useOnline()
-  const [reports, setReports] = useState<LogEntry[]>([])
   const [reportReadings, setReportReadings] = useState<Record<string, ReportReading>>({})
   const [readingsLoading, setReadingsLoading] = useState(false)
 
   // Shares the same cached log payload as the report-logs screen; no second
-  // all-pages /events/ request when both are mounted.
+  // all-pages /events/ request when both are mounted. The raw fetcher keeps one
+  // cache entry so refresh() always reaches the server.
   const { data: cachedLogs, refreshing } = useCachedQuery<LogEntry[]>(
-    'logs:',
-    () => fetchLogs(),
+    LOGS_CACHE_KEY,
+    () => fetchLogs(undefined, { raw: true }),
     {
       ...CACHE_TTL.logs,
       persist: true,
@@ -169,6 +184,12 @@ export default function RecentReportLog() {
     },
   )
   const logs = cachedLogs ?? EMPTY_LOGS
+  const reports = useMemo(
+    () => [...logs]
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, MAX_REPORTS),
+    [logs],
+  )
   const loading = (refreshing || readingsLoading) && reports.length === 0
 
   useEffect(() => {
@@ -176,54 +197,37 @@ export default function RecentReportLog() {
     let cancelled = false
 
     const load = async () => {
+      // Yield once so a cache hit doesn't call setState in the effect body.
+      await Promise.resolve()
       setReadingsLoading(true)
       try {
-        const latest = [...logs]
-          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-          .slice(0, MAX_REPORTS)
-
-        setReports(latest)
-
-        if (!latest.length) {
+        if (!reports.length) {
           setReportReadings({})
           return
         }
 
-        // Event readings are fetched live and never cached. Offline we still
-        // show the saved report rows, with an explicit "needs a connection".
-        if (!online) {
-          const offline: Record<string, ReportReading> = {}
-          for (const log of latest) offline[reportKey(log)] = { state: 'offline', reading: null }
-          setReportReadings(offline)
-          return
-        }
-
+        // Seed from readings cached by this screen or the detail modal so a
+        // mounted activity page never shows "…" for an already-seen report.
         const initial: Record<string, ReportReading> = {}
-        for (const log of latest) {
-          initial[reportKey(log)] = { state: 'loading', reading: null }
+        for (const log of reports) {
+          initial[reportKey(log)] = cachedReportReading(log) ?? {
+            state: online ? 'loading' : 'offline',
+            reading: null,
+          }
         }
         setReportReadings(initial)
 
-        const codeCache = new Map<number, string>()
+        // Offline the saved snapshot is the truth; nothing can be fetched.
+        if (!online) return
 
         await Promise.allSettled(
-          latest.map(async (log) => {
+          reports.map(async (log) => {
             const key = reportKey(log)
 
-            if (log.deviceId == null) {
-              if (!cancelled) {
-                setReportReadings((prev) => ({ ...prev, [key]: { state: 'missing', reading: null } }))
-              }
-              return
-            }
+            if (log.deviceId == null) return
 
             try {
-              let code = codeCache.get(log.deviceId)
-              if (!code) {
-                code = await fetchDeviceCode(log.deviceId)
-                codeCache.set(log.deviceId, code)
-              }
-
+              const code = await fetchDeviceCode(log.deviceId)
               const readings = await fetchEventReadings(code, log.timestamp, log.endTime)
               if (cancelled) return
 
@@ -250,7 +254,7 @@ export default function RecentReportLog() {
     return () => {
       cancelled = true
     }
-  }, [hydrated, logs, online])
+  }, [hydrated, reports, online])
 
   return (
     <section className="panel-card p-5 flex flex-col gap-4">

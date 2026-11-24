@@ -8,7 +8,7 @@ import { useOnline } from '@/lib/useOnline'
 import { useSensors } from '@/context/useSensors'
 import type { LogEntry, MonthGroup } from '@/lib/logReport'
 import { groupByMonth, daySummary, daysInMonth, firstWeekday, monthActivity } from '@/lib/logReport'
-import { fetchLogs } from '@/lib/api/reports'
+import { fetchLogs, LOGS_CACHE_KEY } from '@/lib/api/reports'
 import { isApiConfigured } from '@/lib/api/config'
 import { CACHE_TAGS, CACHE_TTL } from '@/lib/api/cache'
 import { useCachedQuery } from '@/lib/api/useCachedQuery'
@@ -35,8 +35,8 @@ export default function LogConsole() {
   // Persisted logs render immediately after hydration; background refreshes and
   // push/tier invalidations arrive through the subscription without a reload.
   const { data: cachedLogs, error: fetchError, refreshing, refresh } = useCachedQuery<LogEntry[]>(
-    'logs:',
-    () => fetchLogs(),
+    LOGS_CACHE_KEY,
+    () => fetchLogs(undefined, { raw: true }),
     {
       ...CACHE_TTL.logs,
       persist: true,
