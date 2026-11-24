@@ -179,7 +179,8 @@ export function bucketWindow(points: SeriesPoint[], range: TrendRange, window: R
 
   const out: WindowedSeriesPoint[] = []
   for (let i = 0; i < bucketCount; i++) {
-    const t = Math.round(start + (i + 0.5) * size)
+    // End-align bucket timestamps so the right edge follows the current fixed window.
+    const t = Math.min(end, Math.round(start + (i + 1) * size))
     const hasData = counts[i] > 0
     out.push({
       t,

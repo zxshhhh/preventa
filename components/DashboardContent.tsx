@@ -17,11 +17,16 @@ const RANGE_REFRESH_MS = 60_000
 export default function DashboardContent() {
   const { series, liveSavedAt } = useSensors()
   const [range, setRange] = useState<TrendRange>('1H')
-  const [now, setNow] = useState(() => Date.now())
+  const [now, setNow] = useState(0)
 
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 5000)
-    return () => clearInterval(id)
+    const tick = () => setNow(Date.now())
+    const t = setTimeout(tick, 0)
+    const id = setInterval(tick, 5000)
+    return () => {
+      clearTimeout(t)
+      clearInterval(id)
+    }
   }, [])
 
   const liveWindow = useMemo<RangeWindow>(() => {
@@ -49,27 +54,32 @@ export default function DashboardContent() {
     [series, liveWindow],
   )
 
+  const displayWindow = useMemo<RangeWindow | null>(() => {
+    if (range === '1H') return liveWindow
+    const end = now
+    return { start: end - RANGE_MS[range], end }
+  }, [range, liveWindow, now])
+
   const chartSeries = useMemo(() => {
     if (range === '1H') return liveChart
 
     const base = remoteSnapshot
-    if (!base) return []
+    if (!base || !displayWindow) return []
     return base.series.map((s) => {
       const live = series.find((l) => l.id === s.id)?.points ?? []
-      const window: RangeWindow = base.window
-      const inWindowLive = live.filter(
-        (p) => typeof p.t === 'number' && p.t >= window.start && p.t <= window.end,
+      const merged = [...s.points, ...live].filter(
+        (p) => typeof p.t === 'number' && p.t >= displayWindow.start && p.t <= displayWindow.end,
       )
-      // Merge live readings inside the fixed window so the tail can advance between
-      // refreshes; bucketWindow keeps missing buckets as explicit gaps.
+      // Merge cached raw readings with live WS readings inside the sliding
+      // fixed-duration window so 24H/7D/30D follow current time between polls.
       return {
         id: s.id,
-        points: bucketWindow([...s.points, ...inWindowLive], range, window),
+        points: bucketWindow(merged, range, displayWindow),
       }
     })
-  }, [remoteSnapshot, range, series, liveChart])
+  }, [remoteSnapshot, range, series, liveChart, displayWindow])
 
-  const chartWindow: RangeWindow | null = range === '1H' ? liveWindow : remoteSnapshot?.window ?? null
+  const chartWindow: RangeWindow | null = displayWindow
   const chartEmpty = chartSeries.length > 0 && chartSeries.every((s) => !hasRealData(s.points))
   const chartResolved = range === '1H' ? chartSeries.length > 0 : remoteSnapshot !== null
 
