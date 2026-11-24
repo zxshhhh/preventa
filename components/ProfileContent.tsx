@@ -1,13 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSensors } from '@/context/useSensors'
 import { useDevices } from '@/context/useDevice'
 import { useHydrated } from '@/lib/useHydrated'
 import { useOnline } from '@/lib/useOnline'
 import { isApiConfigured } from '@/lib/api/config'
 import { getUsername } from '@/lib/api/auth'
-import { CACHE_TAGS, CACHE_TTL } from '@/lib/api/cache'
+import { CACHE_TAGS, CACHE_TTL, peekCache } from '@/lib/api/cache'
 import { useCachedQuery } from '@/lib/api/useCachedQuery'
 import {
   activeRecipient,
@@ -18,6 +18,8 @@ import {
   fetchProfile,
   fetchResidences,
   isValidRecipient,
+  PROFILE_CACHE_KEY,
+  RESIDENCES_CACHE_KEY,
   sortContacts,
   updateContact,
   updateResidence,
@@ -39,9 +41,7 @@ export default function ProfileContent() {
   const { pushToast } = useSensors()
   const hydrated = useHydrated()
   const online = useOnline()
-  const [contacts, setContacts] = useState<ProfileContact[]>([
-    { id: 1, name: 'User TM', phone: '(+63) 915 5123 867', priority: 1 },
-  ])
+  const [contacts, setContacts] = useState<ProfileContact[]>([])
   const [adding, setAdding] = useState(false)
   const [addDraft, setAddDraft] = useState<ContactDraft>(EMPTY_DRAFT)
   const [editingId, setEditingId] = useState<ProfileContact['id'] | null>(null)
@@ -49,7 +49,7 @@ export default function ProfileContent() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<ProfileContact['id'] | null>(null)
 
   const { data: profile } = useCachedQuery<ProfileData | null>(
-    'profile',
+    PROFILE_CACHE_KEY,
     () => fetchProfile(),
     {
       ...CACHE_TTL.profile,
@@ -59,13 +59,32 @@ export default function ProfileContent() {
     },
   )
 
+  // The cached profile is the source of truth; local state mirrors it so CRUD
+  // can update immediately. Sync only when the server-backed list changes, so a
+  // stale background refresh cannot silently undo a local edit.
+  const profileSignature = profile
+    ? profile.contacts.map((c) => `${c.id}|${c.name}|${c.phone}|${c.priority}`).join(';')
+    : 'none'
+  const syncedProfileRef = useRef<string | null>(null)
+  const [contactsLoaded, setContactsLoaded] = useState(false)
   useEffect(() => {
-    if (!profile?.contacts?.length) return
+    if (!hydrated || syncedProfileRef.current === profileSignature) return
+    syncedProfileRef.current = profileSignature
     const timer = setTimeout(() => {
-      setContacts(profile.contacts.map((c) => ({ id: c.id, name: c.name, phone: c.phone, priority: c.priority })))
+      // Peek again at timer time: the cached query may have hydrated a saved
+      // profile in the same tick, and React may batch both state updates.
+      const cached = peekCache<ProfileData | null>(PROFILE_CACHE_KEY)
+      const source = cached ?? profile
+      setContacts((source?.contacts ?? []).map((c) => ({
+        id: c.id,
+        name: c.name,
+        phone: c.phone,
+        priority: c.priority,
+      })))
+      setContactsLoaded(true)
     }, 0)
     return () => clearTimeout(timer)
-  }, [profile])
+  }, [hydrated, profileSignature, profile])
 
   const username = hydrated ? getUsername() : null
   const displayName = username ? username.toUpperCase() : hydrated ? 'USER' : ''
@@ -139,7 +158,7 @@ export default function ProfileContent() {
   }
 
   const recipient = activeRecipient(contacts)
-  const hasNoValidContact = !contacts.some(isValidRecipient)
+  const hasNoValidContact = contactsLoaded && !contacts.some(isValidRecipient)
 
   return (
     <div className="flex flex-col gap-6">
@@ -417,31 +436,45 @@ const EMPTY_RESIDENCE_DRAFT: ResidenceDraft = { address: '', latitude: '', longi
 function ResidencesSection() {
   const { pushToast } = useSensors()
   const { devices, refresh } = useDevices()
+  const hydrated = useHydrated()
   const online = useOnline()
   const [residences, setResidences] = useState<ResidenceEntry[]>([])
-  const [loaded, setLoaded] = useState(false)
   const [adding, setAdding] = useState(false)
   const [addDraft, setAddDraft] = useState<ResidenceDraft>(EMPTY_RESIDENCE_DRAFT)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState<ResidenceDraft>(EMPTY_RESIDENCE_DRAFT)
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
 
+  // Same persisted entry as the profile API uses, so a reload or a return
+  // visit renders the saved list without another /residences/ request.
+  const {
+    data: cachedResidences,
+    error,
+    refresh: refreshResidences,
+  } = useCachedQuery<ResidenceEntry[]>(
+    RESIDENCES_CACHE_KEY,
+    () => fetchResidences(),
+    {
+      ...CACHE_TTL.profile,
+      persist: true,
+      tags: [CACHE_TAGS.profile],
+      enabled: hydrated && isApiConfigured(),
+    },
+  )
+
+  const residenceSignature = cachedResidences ? JSON.stringify(cachedResidences) : 'none'
+  const syncedResidencesRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!isApiConfigured()) return
-    let cancelled = false
-    void fetchResidences()
-      .then((list) => {
-        if (cancelled) return
-        setResidences(list)
-        setLoaded(true)
-      })
-      .catch(() => {
-        if (!cancelled) setLoaded(true)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
+    if (!hydrated || syncedResidencesRef.current === residenceSignature) return
+    syncedResidencesRef.current = residenceSignature
+    const timer = setTimeout(() => {
+      const cached = peekCache<ResidenceEntry[]>(RESIDENCES_CACHE_KEY)
+      setResidences(cached ?? cachedResidences ?? [])
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [hydrated, residenceSignature, cachedResidences])
+
+  const loaded = !isApiConfigured() || cachedResidences !== null || Boolean(error)
 
   const deviceCount = (residenceId: number) => devices.filter((d) => d.residenceId === residenceId).length
 
@@ -519,6 +552,19 @@ function ResidencesSection() {
             <p className="text-xs font-semibold text-(--amber-indicator) mt-1">
               Offline — residences are read-only until you reconnect.
             </p>
+          )}
+          {Boolean(error) && (
+            <div
+              role="alert"
+              className="flex items-center justify-between gap-3 rounded-lg border border-(--red-indicator)/30 bg-(--red-indicator)/10 px-3 py-2 mt-2"
+            >
+              <span className="text-xs font-semibold text-(--red-indicator)">
+                Could not load residences.
+              </span>
+              <button onClick={() => void refreshResidences()} className="btn-ghost btn-sm">
+                RETRY
+              </button>
+            </div>
           )}
         </div>
         <button

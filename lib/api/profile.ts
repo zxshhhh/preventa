@@ -2,6 +2,10 @@ import { apiGet, apiPost, apiPatch, apiDelete } from './client'
 import { CACHE_TAGS, CACHE_TTL, cachedFetch, invalidateTags } from './cache'
 import { ENDPOINTS } from './endpoints'
 
+/** Shared cache keys — the profile UI subscribes to the same entries. */
+export const PROFILE_CACHE_KEY = 'profile'
+export const RESIDENCES_CACHE_KEY = 'residences'
+
 export interface ProfileContact {
   id: string | number
   name: string
@@ -94,7 +98,7 @@ function normalizeProfile(residence: Residence | null, contacts: ProfileContact[
 
 export function fetchProfile(): Promise<ProfileData | null> {
   return cachedFetch(
-    'profile',
+    PROFILE_CACHE_KEY,
     async () => {
       const residences = await apiGet<PaginatedResidences>(ENDPOINTS.residences)
       const first = residences?.results?.[0]
@@ -164,7 +168,7 @@ function normalizeResidence(raw: Residence): ResidenceEntry {
 
 export function fetchResidences(): Promise<ResidenceEntry[]> {
   return cachedFetch(
-    'residences',
+    RESIDENCES_CACHE_KEY,
     async () => {
       const data = await apiGet<PaginatedResidences>(ENDPOINTS.residences)
       return (data?.results ?? []).map(normalizeResidence)
