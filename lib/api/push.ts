@@ -1,5 +1,6 @@
 import { apiPost, apiDelete, ApiError } from './client'
 import { ENDPOINTS } from './endpoints'
+import { notifyPushChange } from './pushEvents'
 
 // Firebase Web push (Phase 7). Config arrives from the backend teammate via env:
 // NEXT_PUBLIC_FIREBASE_API_KEY / AUTH_DOMAIN / PROJECT_ID / MESSAGING_SENDER_ID / APP_ID + NEXT_PUBLIC_FIREBASE_VAPID_KEY.
@@ -99,11 +100,13 @@ export function getPushOnboarding(): PushOnboardingState {
 /** Called after the native permission dialog settles (also from the Settings flow). */
 export function recordPushPermission(permission: NotificationPermission | 'unsupported'): void {
   writePushOnboarding({ ...readPushOnboarding(), promptedAt: Date.now(), lastPermission: permission })
+  notifyPushChange()
 }
 
 /** Remember that the user waved off the prompt so we don't nag on every route. */
 export function dismissPushPrompt(): void {
   writePushOnboarding({ ...readPushOnboarding(), dismissedAt: Date.now() })
+  notifyPushChange()
 }
 
 export interface PushCapability {
@@ -162,6 +165,7 @@ function setStoredPushToken(token: string | null): void {
   } catch {
     /* ignore storage failures */
   }
+  notifyPushChange()
 }
 
 async function loadFirebaseMessaging() {
@@ -216,6 +220,9 @@ export async function enableBrowserPush(): Promise<PushEnableResult> {
   recordPushPermission(permission)
 
   if (permission !== 'granted') {
+    // Explicit denial and a dismissed native dialog both start the cooldown;
+    // Settings still shows the blocked state when the permission was denied.
+    dismissPushPrompt()
     return {
       ok: false,
       reason: 'denied',

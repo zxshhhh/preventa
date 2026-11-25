@@ -1,20 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { usePathname } from 'next/navigation'
-import { useHydrated } from '@/lib/useHydrated'
 import { useOnline } from '@/lib/useOnline'
-import {
-  dismissPushPrompt,
-  enableBrowserPush,
-  getPushCapability,
-  getPushOnboarding,
-  recordPushPermission,
-  resyncBrowserPush,
-  type PushCapability,
-} from '@/lib/api/push'
-
-const PUSH_DISMISS_MS = 7 * 24 * 60 * 60 * 1000
+import { dismissPushPrompt, enableBrowserPush } from '@/lib/api/push'
+import { usePushState } from '@/lib/api/usePushState'
 
 /**
  * Quiet, dismissible pre-prompt shown on authenticated screens. The native
@@ -22,35 +12,11 @@ const PUSH_DISMISS_MS = 7 * 24 * 60 * 60 * 1000
  * WebKit in particular) ignore prompts that aren't tied to a user gesture.
  */
 export default function PushOptInBanner() {
-  const hydrated = useHydrated()
   const online = useOnline()
   const pathname = usePathname()
-  const [capability, setCapability] = useState<PushCapability | null>(null)
-  const [dismissed, setDismissed] = useState(false)
+  const { ready, capability, promptDismissed } = usePushState()
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!hydrated) return
-    const id = setTimeout(() => {
-      const next = getPushCapability()
-      setCapability(next)
-
-      const onboarding = getPushOnboarding()
-      const dismissedAt = onboarding.dismissedAt
-      setDismissed(Boolean(dismissedAt && Date.now() - dismissedAt < PUSH_DISMISS_MS))
-      if (onboarding.lastPermission && onboarding.lastPermission !== next.permission) {
-        recordPushPermission(next.permission)
-      }
-
-      // iOS drops subscriptions without firing pushsubscriptionchange; re-upsert
-      // the FCM token on each authenticated launch when permission is already on.
-      if (next.permission === 'granted' && next.supported) {
-        void resyncBrowserPush().then(() => setCapability(getPushCapability()))
-      }
-    }, 0)
-    return () => clearTimeout(id)
-  }, [hydrated, online])
 
   const handleEnable = () => {
     if (busy) return
@@ -58,24 +24,17 @@ export default function PushOptInBanner() {
     setMessage(null)
 
     void enableBrowserPush().then((result) => {
-      setCapability(getPushCapability())
-      if (result.ok) {
-        setDismissed(true)
-      } else {
-        setMessage(result.message)
-        if (result.reason === 'denied' || result.reason === 'unsupported') setDismissed(true)
-      }
+      if (!result.ok) setMessage(result.message)
       setBusy(false)
     })
   }
 
   const handleDismiss = () => {
     dismissPushPrompt()
-    setDismissed(true)
   }
 
   // Settings has its own full notification controls — don't duplicate them there.
-  if (!hydrated || !online || pathname === '/settings' || !capability || dismissed) return null
+  if (!ready || !online || pathname === '/settings' || promptDismissed) return null
 
   if (capability.needsHomeScreenInstall && capability.configured) {
     return (
@@ -127,9 +86,9 @@ export default function PushOptInBanner() {
             <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
               Your browser will ask for permission. WARNING and CRITICAL alerts then arrive even when the app is closed.
             </p>
-            {message && (
-              <p className="text-xs text-(--amber-indicator) mt-2 leading-relaxed" role="alert">
-                {message}
+            {(busy || message) && (
+              <p className="text-xs text-(--amber-indicator) mt-2 leading-relaxed" role={busy ? 'status' : 'alert'}>
+                {busy ? 'Waiting for browser permission…' : message}
               </p>
             )}
           </div>

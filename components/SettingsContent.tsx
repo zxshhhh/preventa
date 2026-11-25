@@ -26,9 +26,8 @@ import { ApiError } from '@/lib/api/client'
 import {
   enableBrowserPush,
   disableBrowserPush,
-  getPushCapability,
-  isPushConfigured,
 } from '@/lib/api/push'
+import { usePushState } from '@/lib/api/usePushState'
 
 import { useSensors } from '@/context/useSensors'
 import { useDevices } from '@/context/useDevice'
@@ -1215,55 +1214,39 @@ type PushStatus =
   | 'blocked'
   | 'install'
 
-type NotificationPermissionView = NotificationPermission | 'unsupported'
-
 function BrowserNotificationsSection() {
-  const hydrated = useHydrated()
   const online = useOnline()
-  const configured = isPushConfigured()
-
-  const [status, setStatus] = useState<PushStatus>('disabled')
-  const [permission, setPermission] = useState<NotificationPermissionView>('unsupported')
-  const [needsInstall, setNeedsInstall] = useState(false)
+  const { ready, capability } = usePushState()
+  const [busyState, setBusyState] = useState<'enabling' | 'disabling' | null>(null)
+  const [conflict, setConflict] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
 
-  const syncCapability = () => {
-    const cap = getPushCapability()
-    setPermission(cap.permission)
-    setNeedsInstall(cap.needsHomeScreenInstall)
-    return cap
-  }
-
-  useEffect(() => {
-    if (!hydrated) return
-
-    const id = setTimeout(() => {
-      setNotice(null)
-      const cap = syncCapability()
-      if (cap.enabled) setStatus('enabled')
-      else if (cap.permission === 'denied') setStatus('blocked')
-      else if (cap.needsHomeScreenInstall) setStatus('install')
-      else setStatus('disabled')
-    }, 0)
-
-    return () => clearTimeout(id)
-  }, [hydrated])
+  const configured = capability.configured
+  const permission = capability.permission
+  const needsInstall = capability.needsHomeScreenInstall
+  const baseStatus: PushStatus = capability.enabled
+    ? 'enabled'
+    : conflict
+      ? 'conflict'
+      : permission === 'denied'
+        ? 'blocked'
+        : needsInstall
+          ? 'install'
+          : 'disabled'
+  const status: PushStatus = busyState ?? baseStatus
 
   const handleEnable = () => {
     if (!online) return
-    setStatus('enabling')
+    setBusyState('enabling')
+    setConflict(false)
     setNotice(null)
 
     void enableBrowserPush().then((result) => {
-      const cap = syncCapability()
+      setBusyState(null)
       if (result.ok) {
-        setStatus('enabled')
         setNotice('Enabled on this device.')
       } else {
-        if (result.reason === 'conflict') setStatus('conflict')
-        else if (cap.permission === 'denied') setStatus('blocked')
-        else if (cap.needsHomeScreenInstall) setStatus('install')
-        else setStatus('disabled')
+        setConflict(result.reason === 'conflict')
         setNotice(result.message)
       }
     })
@@ -1271,22 +1254,19 @@ function BrowserNotificationsSection() {
 
   const handleDisable = () => {
     if (!online) return
-    setStatus('disabling')
+    setBusyState('disabling')
+    setConflict(false)
     setNotice(null)
 
     void disableBrowserPush().then((result) => {
-      if (result.ok) {
-        setStatus('disabled')
-        setNotice('Browser notifications are turned off for this device.')
-      } else {
-        setStatus('enabled')
-        setNotice(result.message ?? 'Unsubscribe failed — please retry.')
-      }
+      setBusyState(null)
+      if (result.ok) setNotice('Browser notifications are turned off for this device.')
+      else setNotice(result.message ?? 'Unsubscribe failed — please retry.')
     })
   }
 
-  const busy = status === 'enabling' || status === 'disabling'
-  const canEnable = configured && online && status !== 'enabled' && status !== 'blocked' && status !== 'install'
+  const busy = busyState !== null
+  const canEnable = ready && configured && online && status !== 'enabled' && status !== 'blocked' && status !== 'install'
 
   return (
     <section className="panel-card p-5">
@@ -1322,13 +1302,13 @@ function BrowserNotificationsSection() {
           </button>
         )}
 
-        {hydrated && status === 'enabled' && !busy && (
+        {ready && status === 'enabled' && !busy && (
           <span className="text-xs font-extrabold tracking-wide text-emerald-300 flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-400" />
             ENABLED ON THIS DEVICE
           </span>
         )}
-        {hydrated && status === 'blocked' && (
+        {ready && status === 'blocked' && (
           <span className="text-xs font-extrabold tracking-wide text-(--amber-indicator) flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-(--amber-indicator)" />
             BLOCKED IN BROWSER
@@ -1336,21 +1316,21 @@ function BrowserNotificationsSection() {
         )}
       </div>
 
-      {hydrated && needsInstall && configured && (
+      {ready && needsInstall && configured && (
         <p className="text-xs text-gray-400 mt-3 leading-relaxed">
           On iPhone or iPad, tap <span className="text-gray-200">Share → Add to Home Screen</span>, open Preventa from
           your Home Screen, then enable notifications there. Safari tabs can&apos;t receive push alerts.
         </p>
       )}
 
-      {hydrated && permission === 'denied' && (
+      {ready && permission === 'denied' && (
         <p className="text-xs text-gray-400 mt-3 leading-relaxed">
           Notifications are blocked for this site. Open your browser&apos;s site settings, allow notifications for
           Preventa, then return here to enroll this device.
         </p>
       )}
 
-      {!configured && (
+      {ready && !configured && (
         <p className="text-xs text-gray-500 mt-3 leading-relaxed">
           Push integration is pending — the backend teammate still needs to
           send the Firebase Web config and VAPID key. Fire Event History stays
