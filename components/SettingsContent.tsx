@@ -26,8 +26,8 @@ import { ApiError } from '@/lib/api/client'
 import {
   enableBrowserPush,
   disableBrowserPush,
+  getPushCapability,
   isPushConfigured,
-  getStoredPushToken,
 } from '@/lib/api/push'
 
 import { useSensors } from '@/context/useSensors'
@@ -1212,6 +1212,10 @@ type PushStatus =
   | 'enabling'
   | 'disabling'
   | 'conflict'
+  | 'blocked'
+  | 'install'
+
+type NotificationPermissionView = NotificationPermission | 'unsupported'
 
 function BrowserNotificationsSection() {
   const hydrated = useHydrated()
@@ -1219,14 +1223,27 @@ function BrowserNotificationsSection() {
   const configured = isPushConfigured()
 
   const [status, setStatus] = useState<PushStatus>('disabled')
+  const [permission, setPermission] = useState<NotificationPermissionView>('unsupported')
+  const [needsInstall, setNeedsInstall] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+
+  const syncCapability = () => {
+    const cap = getPushCapability()
+    setPermission(cap.permission)
+    setNeedsInstall(cap.needsHomeScreenInstall)
+    return cap
+  }
 
   useEffect(() => {
     if (!hydrated) return
 
     const id = setTimeout(() => {
       setNotice(null)
-      setStatus(getStoredPushToken() ? 'enabled' : 'disabled')
+      const cap = syncCapability()
+      if (cap.enabled) setStatus('enabled')
+      else if (cap.permission === 'denied') setStatus('blocked')
+      else if (cap.needsHomeScreenInstall) setStatus('install')
+      else setStatus('disabled')
     }, 0)
 
     return () => clearTimeout(id)
@@ -1238,11 +1255,15 @@ function BrowserNotificationsSection() {
     setNotice(null)
 
     void enableBrowserPush().then((result) => {
+      const cap = syncCapability()
       if (result.ok) {
         setStatus('enabled')
-        setNotice('Enabled on this browser.')
+        setNotice('Enabled on this device.')
       } else {
-        setStatus(result.reason === 'conflict' ? 'conflict' : 'disabled')
+        if (result.reason === 'conflict') setStatus('conflict')
+        else if (cap.permission === 'denied') setStatus('blocked')
+        else if (cap.needsHomeScreenInstall) setStatus('install')
+        else setStatus('disabled')
         setNotice(result.message)
       }
     })
@@ -1256,7 +1277,7 @@ function BrowserNotificationsSection() {
     void disableBrowserPush().then((result) => {
       if (result.ok) {
         setStatus('disabled')
-        setNotice('Browser notifications are turned off for this browser.')
+        setNotice('Browser notifications are turned off for this device.')
       } else {
         setStatus('enabled')
         setNotice(result.message ?? 'Unsubscribe failed — please retry.')
@@ -1265,6 +1286,7 @@ function BrowserNotificationsSection() {
   }
 
   const busy = status === 'enabling' || status === 'disabling'
+  const canEnable = configured && online && status !== 'enabled' && status !== 'blocked' && status !== 'install'
 
   return (
     <section className="panel-card p-5">
@@ -1292,7 +1314,7 @@ function BrowserNotificationsSection() {
           <button
             type="button"
             onClick={handleEnable}
-            disabled={busy || !configured || !online}
+            disabled={!canEnable || busy}
             title={online ? undefined : 'Reconnect to change push settings'}
             className="btn-primary btn-md min-w-32 disabled:opacity-40 disabled:cursor-not-allowed"
           >
@@ -1303,10 +1325,30 @@ function BrowserNotificationsSection() {
         {hydrated && status === 'enabled' && !busy && (
           <span className="text-xs font-extrabold tracking-wide text-emerald-300 flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-400" />
-            ENABLED ON THIS BROWSER
+            ENABLED ON THIS DEVICE
+          </span>
+        )}
+        {hydrated && status === 'blocked' && (
+          <span className="text-xs font-extrabold tracking-wide text-(--amber-indicator) flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-(--amber-indicator)" />
+            BLOCKED IN BROWSER
           </span>
         )}
       </div>
+
+      {hydrated && needsInstall && configured && (
+        <p className="text-xs text-gray-400 mt-3 leading-relaxed">
+          On iPhone or iPad, tap <span className="text-gray-200">Share → Add to Home Screen</span>, open Preventa from
+          your Home Screen, then enable notifications there. Safari tabs can&apos;t receive push alerts.
+        </p>
+      )}
+
+      {hydrated && permission === 'denied' && (
+        <p className="text-xs text-gray-400 mt-3 leading-relaxed">
+          Notifications are blocked for this site. Open your browser&apos;s site settings, allow notifications for
+          Preventa, then return here to enroll this device.
+        </p>
+      )}
 
       {!configured && (
         <p className="text-xs text-gray-500 mt-3 leading-relaxed">

@@ -8,7 +8,7 @@
    and icons) but NEVER API responses — user data lives in the app's user-scoped
    localStorage cache (lib/api/cache.ts) and is rendered from there offline. */
 
-const CACHE = 'preventa-v3'
+const CACHE = 'preventa-v4'
 const PRECACHE = ['/', '/login', '/activity', '/log', '/settings', '/profile']
 
 self.addEventListener('install', (event) => {
@@ -97,6 +97,53 @@ const firebaseConfig = ['apiKey', 'authDomain', 'projectId', 'messagingSenderId'
   {},
 )
 
+/* Register this BEFORE importing Firebase: the messaging SDK installs its own
+   notificationclick handler and would otherwise override our deep-link logic. */
+self.addEventListener('notificationclick', (event) => {
+  const data = event.notification.data || {}
+  const type = data.type
+  if (type && type !== 'preventa_fire_event' && type !== 'preventa_test_alert') return
+
+  event.stopImmediatePropagation()
+  event.notification.close()
+
+  const fallback = new URL('/activity', self.location.origin)
+  let target = fallback
+  if (typeof data.url === 'string') {
+    try {
+      const requested = new URL(data.url, self.location.origin)
+      if (requested.origin === self.location.origin) target = requested
+    } catch {
+      /* keep the dashboard fallback */
+    }
+  }
+
+  event.waitUntil(
+    (async () => {
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      const existing = clients.find((client) => {
+        try {
+          return new URL(client.url).origin === self.location.origin
+        } catch {
+          return false
+        }
+      })
+      if (existing) {
+        await existing.focus()
+        if ('navigate' in existing && existing.url !== target.href) {
+          try {
+            await existing.navigate(target.href)
+          } catch {
+            existing.postMessage({ source: 'preventa-sw', kind: 'navigate', url: target.href })
+          }
+        }
+        return
+      }
+      await self.clients.openWindow(target.href)
+    })(),
+  )
+})
+
 if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagingSenderId && firebaseConfig.appId) {
   Promise.all([
     import('https://www.gstatic.com/firebasejs/13.3.0/firebase-app.js'),
@@ -106,23 +153,31 @@ if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagin
       const firebaseApp = initializeApp(firebaseConfig)
       const EVENT_PATH = new URL('/activity', self.location.origin)
 
-      self.addEventListener('notificationclick', (event) => {
-        const type = event.notification.data?.type
-        if (type !== 'preventa_fire_event' && type !== 'preventa_test_alert') return
-        event.stopImmediatePropagation()
-        event.notification.close()
-        event.waitUntil(self.clients.openWindow(EVENT_PATH.href))
-      })
-
       onBackgroundMessage(getMessaging(firebaseApp), (message) => {
-        const alert = message.data
-        if (alert?.type !== 'preventa_fire_event' && alert?.type !== 'preventa_test_alert') return
+        // Always show something: WebKit penalises silence and can remove the
+        // subscription. Unknown payloads still get a generic PREVENTA alert.
+        const alert = message.data || {}
+        const type = alert.type || 'preventa_fire_event'
+        const tier = Number(alert.peak_tier ?? alert.tier ?? 0)
 
-        const notify = self.registration.showNotification(alert.title || 'PREVENTA alert', {
-          body: alert.body || 'A new fire incident was reported.',
-          tag: `preventa-event-${alert.event_id ?? 'unknown'}`,
-          data: { type: alert.type },
-        })
+        const notify = self.registration
+          .showNotification(alert.title || 'PREVENTA alert', {
+            body: alert.body || 'A new fire incident was reported.',
+            icon: '/icon-192.png',
+            badge: '/icon-192.png',
+            tag: `preventa-event-${alert.event_id ?? 'unknown'}`,
+            data: { type, url: EVENT_PATH.href },
+            // Safari 18.4+ opens this URL without needing notificationclick.
+            navigate: EVENT_PATH.href,
+            requireInteraction: tier >= 4,
+          })
+          .catch(() =>
+            self.registration.showNotification('PREVENTA alert', {
+              body: 'A new fire incident was reported.',
+              tag: 'preventa-fallback',
+              data: { type: 'preventa_fire_event', url: EVENT_PATH.href },
+            }),
+          )
 
         const forward = self.clients
           .matchAll({ type: 'window', includeUncontrolled: true })
@@ -143,6 +198,27 @@ if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagin
       })
     })
     .catch(() => {
-      /* Firebase modules unavailable (e.g. cold offline install) — app shell still works */
+      /* Firebase modules unavailable (e.g. cold offline install): keep alerts
+         working with the plain Push API rather than silently dropping them. */
+      self.addEventListener('push', (event) => {
+        let payload = {}
+        try {
+          payload = event.data ? event.data.json() : {}
+        } catch {
+          payload = { body: event.data ? event.data.text() : '' }
+        }
+        const notification = payload.notification || payload
+        const url = typeof notification.navigate === 'string' ? notification.navigate : '/activity'
+        const title = notification.title || payload.title || 'PREVENTA alert'
+        const body = notification.body || payload.body || 'A new fire incident was reported.'
+        event.waitUntil(
+          self.registration.showNotification(title, {
+            body,
+            tag: `preventa-event-${payload.event_id ?? notification.tag ?? 'unknown'}`,
+            data: { type: payload.type || 'preventa_fire_event', url },
+            navigate: url,
+          }),
+        )
+      })
     })
 }

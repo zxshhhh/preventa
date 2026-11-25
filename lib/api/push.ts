@@ -11,6 +11,13 @@ import { ENDPOINTS } from './endpoints'
 // event_id / title / body; the background SW shows a notification that opens /activity.
 
 const PUSH_TOKEN_KEY = 'preventa.pushToken'
+const PUSH_ONBOARDING_KEY = 'preventa.pushOnboarding.v1'
+
+export interface PushOnboardingState {
+  promptedAt?: number
+  dismissedAt?: number
+  lastPermission?: NotificationPermission | 'unsupported'
+}
 
 interface FirebaseWebConfig {
   apiKey: string
@@ -42,6 +49,100 @@ export function getVapidKey(): string | null {
 /** True only when both the public Web config and the VAPID key are present. */
 export function isPushConfigured(): boolean {
   return getFirebaseConfig() !== null && getVapidKey() !== null
+}
+
+/** Safe read of the browser's notification permission (SSR/unsupported → 'unsupported'). */
+export function getNotificationPermission(): NotificationPermission | 'unsupported' {
+  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported'
+  try {
+    return Notification.permission
+  } catch {
+    return 'unsupported'
+  }
+}
+
+function readPushOnboarding(): PushOnboardingState {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = localStorage.getItem(PUSH_ONBOARDING_KEY)
+    if (!raw) return {}
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return {}
+    const state = parsed as PushOnboardingState
+    const permission = state.lastPermission
+    const validPermission =
+      permission === 'granted' || permission === 'denied' || permission === 'default' || permission === 'unsupported'
+    return {
+      promptedAt: typeof state.promptedAt === 'number' ? state.promptedAt : undefined,
+      dismissedAt: typeof state.dismissedAt === 'number' ? state.dismissedAt : undefined,
+      lastPermission: validPermission ? permission : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+function writePushOnboarding(state: PushOnboardingState): void {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(PUSH_ONBOARDING_KEY, JSON.stringify(state))
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
+/** Read the local opt-in prompt state. Call only after hydration. */
+export function getPushOnboarding(): PushOnboardingState {
+  return readPushOnboarding()
+}
+
+/** Called after the native permission dialog settles (also from the Settings flow). */
+export function recordPushPermission(permission: NotificationPermission | 'unsupported'): void {
+  writePushOnboarding({ ...readPushOnboarding(), promptedAt: Date.now(), lastPermission: permission })
+}
+
+/** Remember that the user waved off the prompt so we don't nag on every route. */
+export function dismissPushPrompt(): void {
+  writePushOnboarding({ ...readPushOnboarding(), dismissedAt: Date.now() })
+}
+
+export interface PushCapability {
+  configured: boolean
+  supported: boolean
+  permission: NotificationPermission | 'unsupported'
+  /** iOS Safari tab: notifications only work after Add to Home Screen. */
+  needsHomeScreenInstall: boolean
+  canRequest: boolean
+  enabled: boolean
+}
+
+/** Feature-detect push without prompting. Safe to call after hydration. */
+export function getPushCapability(): PushCapability {
+  const configured = isPushConfigured()
+  const permission = getNotificationPermission()
+  const standalone =
+    typeof navigator !== 'undefined' &&
+    'standalone' in navigator &&
+    (navigator as Navigator & { standalone?: boolean }).standalone === true
+  const needsHomeScreenInstall =
+    typeof navigator !== 'undefined' && 'standalone' in navigator && permission === 'unsupported' && !standalone
+  const supported =
+    configured &&
+    permission !== 'unsupported' &&
+    typeof window !== 'undefined' &&
+    window.isSecureContext &&
+    typeof navigator !== 'undefined' &&
+    'serviceWorker' in navigator &&
+    !needsHomeScreenInstall
+
+  return {
+    configured,
+    supported,
+    permission,
+    needsHomeScreenInstall,
+    canRequest: supported && permission === 'default',
+    enabled: supported && permission === 'granted' && Boolean(getStoredPushToken()),
+  }
 }
 
 export function getStoredPushToken(): string | null {
@@ -112,6 +213,8 @@ export async function enableBrowserPush(): Promise<PushEnableResult> {
   } catch {
     permission = 'unsupported'
   }
+  recordPushPermission(permission)
+
   if (permission !== 'granted') {
     return {
       ok: false,
@@ -196,6 +299,36 @@ export async function disableBrowserPush(accessTokenOverride?: string | null): P
 
   setStoredPushToken(null)
   return { ok: true }
+}
+
+/**
+ * Launch-time subscription check. WebKit can drop iOS subscriptions silently and
+ * never fires `pushsubscriptionchange` there, so re-issue the FCM token on every
+ * authenticated launch. Safe to call on every route: it never prompts and never
+ * writes to the server unless the token actually changed.
+ */
+export async function resyncBrowserPush(): Promise<void> {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return
+  if (!isPushConfigured() || navigator.onLine === false) return
+  if (!('serviceWorker' in navigator) || getNotificationPermission() !== 'granted') return
+
+  try {
+    const registration = (await navigator.serviceWorker.getRegistration('/')) ?? (await navigator.serviceWorker.ready)
+    const fb = await loadFirebaseMessaging()
+    if (!(await fb.isSupported().catch(() => false))) return
+
+    const messaging = fb.getMessaging(fb.ensureApp(getFirebaseConfig()!))
+    const token = await fb.getToken(messaging, {
+      vapidKey: getVapidKey()!,
+      serviceWorkerRegistration: registration,
+    })
+    if (!token || token === getStoredPushToken()) return
+
+    await apiPost(ENDPOINTS.pushSubscription, { token })
+    setStoredPushToken(token)
+  } catch {
+    /* A failed resync must never block the app; Settings can retry manually. */
+  }
 }
 
 export interface PushAlert {

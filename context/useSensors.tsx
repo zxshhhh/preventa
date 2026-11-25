@@ -475,8 +475,24 @@ export function SensorProvider({ children }: { children: ReactNode }) {
     })()
 
     const onSwMessage = (event: MessageEvent) => {
-      const msg = event.data as { source?: string; kind?: string; data?: Record<string, string>; notification?: { title?: string; body?: string } } | null
-      if (!msg || msg.source !== 'preventa-sw' || msg.kind !== 'push') return
+      const msg = event.data as {
+        source?: string
+        kind?: string
+        url?: string
+        data?: Record<string, string>
+        notification?: { title?: string; body?: string }
+      } | null
+      if (!msg || msg.source !== 'preventa-sw') return
+      if (msg.kind === 'navigate' && typeof msg.url === 'string') {
+        try {
+          const target = new URL(msg.url, window.location.origin)
+          if (target.origin === window.location.origin) window.location.assign(target.href)
+        } catch {
+          /* ignore malformed SW navigation messages */
+        }
+        return
+      }
+      if (msg.kind !== 'push') return
       const alert = parsePushAlert(msg.data ?? {}, msg.notification ?? undefined)
       if (!alert) return
       const visible = typeof document !== 'undefined' && document.visibilityState === 'visible'
