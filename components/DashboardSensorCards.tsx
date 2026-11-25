@@ -1,12 +1,13 @@
 ﻿import { useEffect, useState, type ReactNode } from 'react'
 import { useOnline, formatSavedAt } from '@/lib/useOnline'
+import { isApiConfigured } from '@/lib/api/config'
+import { useSensors } from '@/context/useSensors'
 import DashboardMetricCard from './ui/DashboardMetricCard'
 import ChartHoverOverlay from './ui/ChartHoverOverlay'
 import { ChartHoverProvider, useChartHoverApi } from './ui/ChartHoverProvider'
 import type { SensorId, SensorSeries, SeriesPoint, StatusLevel, TrendRange, RangeWindow } from '@/lib/dashboardData'
 import {
   CARD_ORDER,
-  NO_DATA_GAP_MESSAGE,
   SENSORS,
   deltaFromFirst,
   formatNumber,
@@ -25,7 +26,7 @@ const RANGE_LABELS: Record<TrendRange, string> = {
   '30D': '30D',
 }
 
-/** The IoT feed is considered dead when no reading has been received for this long. */
+/** Only a WebSocket-delivered reading this recent counts as a live device heartbeat. */
 const LIVE_STALE_MS = 120_000
 
 const ICONS: Record<SensorId, ReactNode> = {
@@ -82,7 +83,6 @@ function ClearHoverOnRangeChange({ range }: { range: TrendRange }) {
 }
 
 interface Props {
-  series: SensorSeries[]
   chartSeries: SensorSeries[]
   range: TrendRange
   onRangeChange: (r: TrendRange) => void
@@ -91,23 +91,24 @@ interface Props {
   window: RangeWindow | null
   /** True when the selected fixed window has resolved with no real readings. */
   empty: boolean
-  refreshing?: boolean
 }
 
 export default function DashboardSensorCards({
-  series,
   chartSeries,
   range,
   onRangeChange,
   cachedAt,
   window,
   empty,
-  refreshing,
 }: Props) {
   const online = useOnline()
-  // Re-evaluate feed freshness on a tick so the dot flips to red even when no
-  // new readings arrive (and trigger no re-render otherwise). `now` starts at 0
-  // and is only set client-side after mount, keeping SSR/hydration consistent.
+  const { liveStatus, lastWsReadingAt } = useSensors()
+  // Only the very first response is a pending state; once a resolved window has
+  // no real readings the cards switch to their explicit "NO DATA" state.
+  const chartLoading = online && isApiConfigured() && chartSeries.length === 0
+  // Re-evaluate WS-delivered freshness on a tick so the dot flips to red when
+  // the device stops sending (and triggers no re-render otherwise). `now` starts
+  // at 0 and is only set client-side after mount to keep SSR/hydration stable.
   const [now, setNow] = useState(0)
   useEffect(() => {
     const tick = () => setNow(Date.now())
@@ -119,15 +120,32 @@ export default function DashboardSensorCards({
     }
   }, [])
 
-  // Newest backend reading timestamp across all buffers — both the live WS
-  // stream and the 30s backfill stamp points with the device's payload time.
-  let lastReadingT = 0
-  for (const s of series) {
-    for (const p of s.points) {
-      if (typeof p.t === 'number' && p.t > lastReadingT) lastReadingT = p.t
-    }
-  }
-  const liveFeed = online && now > 0 && lastReadingT > 0 && now - lastReadingT <= LIVE_STALE_MS
+  const liveFeed =
+    online &&
+    liveStatus === 'connected' &&
+    now > 0 &&
+    lastWsReadingAt !== null &&
+    now - lastWsReadingAt <= LIVE_STALE_MS
+  const liveConnecting = liveStatus === 'connecting' || liveStatus === 'reconnecting'
+  const liveLabel = !online || liveStatus === 'offline'
+    ? 'Offline — live connection paused'
+    : liveStatus === 'idle'
+      ? 'Live connection unavailable'
+      : liveStatus === 'connecting'
+        ? 'Connecting to live feed'
+        : liveStatus === 'reconnecting'
+          ? 'Reconnecting to live feed'
+          : liveFeed
+            ? 'Live — receiving device readings'
+            : 'Live feed connected — waiting for device readings'
+  const liveDotClass =
+    !online || liveStatus === 'offline' || liveConnecting
+      ? 'bg-(--amber-indicator)'
+      : liveStatus === 'idle'
+        ? 'bg-gray-500'
+        : liveFeed
+          ? 'bg-(--green-indicator)'
+          : 'bg-(--red-indicator)'
 
   // Card values are anchored to real readings inside the selected fixed window.
   // Gap buckets (value null) are rendered as gray diagonal no-data gaps.
@@ -142,7 +160,7 @@ export default function DashboardSensorCards({
       id,
       icon: ICONS[id],
       title: cfg.name,
-      value: lastReal ? formatNumber(lastReal.value, cfg.decimals) : '-',
+      value: lastReal ? formatNumber(lastReal.value, cfg.decimals) : 'NO DATA',
       unit: cfg.unit,
       decimals: cfg.decimals,
       delta: anyData ? deltaFromFirst(chartPoints) : 0,
@@ -180,17 +198,20 @@ export default function DashboardSensorCards({
               <button
                 key={r}
                 onClick={() => onRangeChange(r)}
+                title={r === '1H' ? liveLabel : undefined}
+                aria-label={r === '1H' ? `LIVE — ${liveLabel}` : undefined}
                 className={'btn-segment ' + (range === r ? 'btn-segment-active' : 'text-gray-400 hover:text-gray-200')}
               >
                 {r === '1H' && (
-                  <span className="relative inline-flex h-2 w-2 align-middle mr-1.5">
+                  <span className="relative inline-flex h-2 w-2 align-middle mr-1.5" aria-hidden="true">
                     {liveFeed && (
                       <span className="absolute inline-flex h-full w-full rounded-full bg-(--green-indicator) opacity-75 animate-ping" />
                     )}
                     <span
                       className={
                         'relative inline-flex rounded-full h-2 w-2 ' +
-                        (!online ? 'bg-(--amber-indicator)' : liveFeed ? 'bg-(--green-indicator)' : 'bg-(--red-indicator)')
+                        (liveConnecting ? 'animate-pulse ' : '') +
+                        liveDotClass
                       }
                     />
                   </span>
@@ -205,15 +226,16 @@ export default function DashboardSensorCards({
             No saved data for this range. Reconnect once to save it for offline use.
           </p>
         )}
-        {empty && (
-          <p role="status" className="text-sm text-gray-400">
-            {NO_DATA_GAP_MESSAGE}
-            {refreshing ? ' Checking for readings…' : ''}
-          </p>
-        )}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-5">
           {cards.map(({ id, ...d }) => (
-            <DashboardMetricCard key={id} id={id} {...d} window={window} range={range} />
+            <DashboardMetricCard
+              key={id}
+              id={id}
+              {...d}
+              window={window}
+              range={range}
+              loading={chartLoading}
+            />
           ))}
         </div>
       </div>

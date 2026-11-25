@@ -28,6 +28,7 @@ import {
   type ResidenceEntry,
 } from '@/lib/api/profile'
 import UserAvatar from '@/components/ui/UserAvatar'
+import { SkeletonBar, SkeletonBlock, SkeletonCircle } from '@/components/ui/Skeleton'
 
 interface ContactDraft {
   name: string
@@ -198,58 +199,67 @@ export default function ProfileContent() {
             </p>
           )}
           <div className="space-y-3">
-            {sortContacts(contacts).map((contact) => {
-              if (editingId === contact.id) {
-                return (
-                  <div key={contact.id} className="flex flex-col gap-2 p-3 rounded-xl bg-white/5 border border-(--secondary-color)/30">
-                    <input
-                      value={editDraft.name}
-                      onChange={(e) => setEditDraft((d) => ({ ...d, name: e.target.value }))}
-                      aria-label="Contact name" placeholder="Contact name"
-                      className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:border-(--secondary-color) transition-all"
+            {hydrated && isApiConfigured() && !contactsLoaded ? (
+              <ContactSkeletonRows />
+            ) : (
+              <>
+                {sortContacts(contacts).map((contact) => {
+                  if (editingId === contact.id) {
+                    return (
+                      <div key={contact.id} className="flex flex-col gap-2 p-3 rounded-xl bg-white/5 border border-(--secondary-color)/30">
+                        <input
+                          value={editDraft.name}
+                          onChange={(e) => setEditDraft((d) => ({ ...d, name: e.target.value }))}
+                          aria-label="Contact name" placeholder="Contact name"
+                          className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:border-(--secondary-color) transition-all"
+                        />
+                        <input
+                          value={editDraft.phone}
+                          onChange={(e) => setEditDraft((d) => ({ ...d, phone: e.target.value }))}
+                          aria-label="Contact phone number" placeholder="Contact number"
+                          className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:border-(--secondary-color) transition-all"
+                        />
+                        <PriorityPicker
+                          value={editDraft.priority}
+                          onChange={(priority) => setEditDraft((d) => ({ ...d, priority }))}
+                        />
+                        <div className="flex gap-2 justify-end">
+                          <button
+                            onClick={() => { setEditingId(null); setEditDraft(EMPTY_DRAFT) }}
+                            className="btn-ghost btn-sm"
+                          >
+                            CANCEL
+                          </button>
+                          <button
+                            onClick={() => saveEdit(contact)}
+                            disabled={!online}
+                            className="btn-primary btn-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            SAVE
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  }
+                  return (
+                    <ContactRow
+                      key={contact.id}
+                      contact={contact}
+                      isRecipient={recipient?.id === contact.id}
+                      confirming={confirmDeleteId === contact.id}
+                      offline={!online}
+                      onEdit={() => startEdit(contact)}
+                      onDelete={() => { setEditingId(null); setConfirmDeleteId(contact.id) }}
+                      onConfirmDelete={() => removeContact(contact)}
+                      onCancelDelete={() => setConfirmDeleteId(null)}
                     />
-                    <input
-                      value={editDraft.phone}
-                      onChange={(e) => setEditDraft((d) => ({ ...d, phone: e.target.value }))}
-                      aria-label="Contact phone number" placeholder="Contact number"
-                      className="h-9 rounded-lg border border-white/40 bg-white/5 px-3 text-sm text-gray-100 placeholder:text-gray-500 focus:border-(--secondary-color) transition-all"
-                    />
-                    <PriorityPicker
-                      value={editDraft.priority}
-                      onChange={(priority) => setEditDraft((d) => ({ ...d, priority }))}
-                    />
-                    <div className="flex gap-2 justify-end">
-                      <button
-                        onClick={() => { setEditingId(null); setEditDraft(EMPTY_DRAFT) }}
-                        className="btn-ghost btn-sm"
-                      >
-                        CANCEL
-                      </button>
-                      <button
-                        onClick={() => saveEdit(contact)}
-                        disabled={!online}
-                        className="btn-primary btn-sm disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        SAVE
-                      </button>
-                    </div>
-                  </div>
-                )
-              }
-              return (
-                <ContactRow
-                  key={contact.id}
-                  contact={contact}
-                  isRecipient={recipient?.id === contact.id}
-                  confirming={confirmDeleteId === contact.id}
-                  offline={!online}
-                  onEdit={() => startEdit(contact)}
-                  onDelete={() => { setEditingId(null); setConfirmDeleteId(contact.id) }}
-                  onConfirmDelete={() => removeContact(contact)}
-                  onCancelDelete={() => setConfirmDeleteId(null)}
-                />
-              )
-            })}
+                  )
+                })}
+                {contactsLoaded && contacts.length === 0 && (
+                  <p className="text-xs text-gray-500">No contacts yet — add one to receive emergency SMS.</p>
+                )}
+              </>
+            )}
             {adding && (
               <div className="flex flex-col gap-2 p-3 rounded-xl bg-white/5">
                 <input
@@ -407,6 +417,27 @@ function ContactRow({ contact, isRecipient, confirming, offline, onDelete, onEdi
   )
 }
 
+function ContactSkeletonRows() {
+  return (
+    <div role="status" aria-label="Loading emergency contacts" className="space-y-3">
+      {[0, 1, 2].map((row) => (
+        <div key={row} className="flex items-center gap-3 p-3 rounded-xl bg-white/5">
+          <SkeletonCircle className="h-10 w-10" />
+          <div className="flex-1 min-w-0">
+            <SkeletonBar className="h-3.5 w-2/5" />
+            <SkeletonBar className="mt-2 h-3 w-3/5" />
+          </div>
+          <SkeletonBar className="h-5 w-16 rounded-full" />
+          <div className="flex items-center gap-1 shrink-0">
+            <SkeletonBlock className="h-7 w-7 rounded-lg" />
+            <SkeletonBlock className="h-7 w-7 rounded-lg" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function StaticRow({ name, phone, badge }: { name: string; phone: string; badge: string }) {  return (
     <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5">
       <span className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-emerald-400/10 text-emerald-300">
@@ -432,6 +463,26 @@ interface ResidenceDraft {
 }
 
 const EMPTY_RESIDENCE_DRAFT: ResidenceDraft = { address: '', latitude: '', longitude: '' }
+
+function ResidenceSkeletonRows() {
+  return (
+    <div role="status" aria-label="Loading residences" className="space-y-3">
+      {[0, 1, 2].map((row) => (
+        <div key={row} className="flex items-center gap-3 p-3 rounded-xl bg-white/5">
+          <SkeletonBlock className="h-10 w-10 shrink-0 rounded-xl" />
+          <div className="flex-1 min-w-0">
+            <SkeletonBar className="h-3.5 w-1/2" />
+            <SkeletonBar className="mt-2 h-3 w-4/5" />
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            <SkeletonBlock className="h-7 w-7 rounded-lg" />
+            <SkeletonBlock className="h-7 w-7 rounded-lg" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 function ResidencesSection() {
   const { pushToast } = useSensors()
@@ -611,7 +662,7 @@ function ResidencesSection() {
       )}
 
       {!loaded ? (
-        <p className="text-xs text-gray-500">Loading residences…</p>
+        <ResidenceSkeletonRows />
       ) : residences.length === 0 ? (
         <p className="text-xs text-gray-500">No residences yet — add one to start grouping boards.</p>
       ) : (

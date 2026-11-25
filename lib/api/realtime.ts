@@ -56,7 +56,8 @@ function mapPayload(payload: LiveReadingPayload): SensorPoint {
 export function connectLiveTelemetry(
   token: string,
   onReading: (points: SensorPoint, fusion: FusionData) => void,
-  onClose?: (code: number) => void
+  onClose?: (code: number) => void,
+  onOpen?: () => void
 ): WebSocket {
   const url = `${getWebSocketUrl()}?token=${encodeURIComponent(token)}`
   const ws = new WebSocket(url)
@@ -82,6 +83,10 @@ export function connectLiveTelemetry(
     } catch {
       /* ignore malformed messages */
     }
+  }
+
+  ws.onopen = () => {
+    onOpen?.()
   }
 
   ws.onclose = (e) => {

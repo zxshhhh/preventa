@@ -17,6 +17,7 @@ import {
 import { formatTime } from '@/lib/logReport'
 import { formatNumber } from '@/lib/dashboardData'
 import type { LogEntry, ReadingEntry } from '@/lib/logReport'
+import { SkeletonBar } from '@/components/ui/Skeleton'
 
 const MAX_REPORTS = 3
 const SKELETON_REPORTS = [0, 1, 2] as const
@@ -112,8 +113,6 @@ function ReportCard({ log, reading }: { log: LogEntry; reading: ReportReading | 
           let value = '—'
           if (r.state === 'ready' && r.reading) {
             value = readingDisplayValue(r.reading.values, field.keys)
-          } else if (r.state === 'loading') {
-            value = '…'
           }
 
           return (
@@ -122,7 +121,11 @@ function ReportCard({ log, reading }: { log: LogEntry; reading: ReportReading | 
                 {field.label}
               </p>
               <p className="mt-1 flex flex-wrap items-baseline gap-x-1">
-                <span className="tnum text-sm font-bold text-gray-100">{value}</span>
+                {r.state === 'loading' ? (
+                  <SkeletonBar className="h-4 w-14 rounded" />
+                ) : (
+                  <span className="tnum text-sm font-bold text-gray-100">{value}</span>
+                )}
                 <span className="text-xs text-gray-400">{field.unit}</span>
               </p>
             </div>

@@ -46,6 +46,7 @@ interface Props {
   range: TrendRange
   hasAnyData: boolean
   lastReadingLabel?: string
+  loading?: boolean
 }
 
 /** Status pill styling keyed by label; signal colors match the design tokens. */
@@ -75,6 +76,7 @@ export default function DashboardMetricCard({
   range,
   hasAnyData,
   lastReadingLabel,
+  loading = false,
 }: Props) {
   const gid = useId().replace(/:/g, '')
   const svgRef = useRef<SVGSVGElement>(null)
@@ -83,6 +85,7 @@ export default function DashboardMetricCard({
   void window
   void range
   const hasSeries = chartPoints.length > 1
+  const chartLoading = !hasSeries && loading
   const realLast = lastRealPoint(chartPoints)
   const geom = hasSeries ? chartGeom(chartPoints, CHART_RANGES[id]) : null
 
@@ -223,9 +226,19 @@ export default function DashboardMetricCard({
       </div>
       <div className="flex items-end justify-between gap-2">
         <div>
-          <div className="flex items-baseline gap-1.5">
-            <span className="tnum text-4xl font-extrabold text-gray-100 tracking-tight leading-none">{value}</span>
-            <span className="text-sm font-bold text-gray-400">{unit}</span>
+          <div className="flex min-h-9 items-baseline gap-1.5">
+            {hasAnyData ? (
+              <>
+                <span className="tnum text-4xl font-extrabold text-gray-100 tracking-tight leading-none">{value}</span>
+                <span className="text-sm font-bold text-gray-400">{unit}</span>
+              </>
+            ) : loading ? (
+              <span className="text-4xl font-extrabold text-gray-400 tracking-tight leading-none">-</span>
+            ) : (
+              <span className="text-2xl font-extrabold text-gray-100 tracking-tight leading-none sm:text-3xl">
+                NO DATA
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1.5 mt-2">
             {hasAnyData ? (
@@ -248,14 +261,16 @@ export default function DashboardMetricCard({
               </>
             ) : hasSeries ? (
               <span className="text-xs font-semibold text-gray-500">{NO_DATA_GAP_MESSAGE}</span>
-            ) : (
+            ) : loading ? (
               <span className="text-xs font-semibold text-gray-500">Loading readings</span>
+            ) : (
+              <span className="text-xs font-semibold text-gray-500">{NO_DATA_GAP_MESSAGE}</span>
             )}
           </div>
         </div>
       </div>
       <div className="relative">
-        {!hasSeries ? (
+        {chartLoading ? (
           // Ghost chart: fixed placeholder wave in the same viewBox and margins
           // as the real chart so the swap-in causes no layout jump.
           <div className="skeleton-shine rounded-lg" aria-hidden="true">
@@ -286,7 +301,7 @@ export default function DashboardMetricCard({
               ))}
             </svg>
           </div>
-        ) : geom && (
+        ) : geom ? (
           <svg
             ref={svgRef}
             viewBox={`0 0 ${W} ${H}`}
@@ -358,11 +373,6 @@ export default function DashboardMetricCard({
             {segmentPaths.map((seg, i) => (
               <path key={`line-${i}`} d={seg.line} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
             ))}
-            {!hasAnyData && (
-              <text x={W / 2} y={M.top + INNER_H / 2} textAnchor="middle" fontSize="10" fill="var(--chart-axis)">
-                {NO_DATA_GAP_MESSAGE}
-              </text>
-            )}
             {realLast && geom && lastRealIdx >= 0 && (
               <g>
                 {pulse && <circle className="dot-ping" cx={lastX} cy={lastY} r="4" fill={color} />}
@@ -370,6 +380,37 @@ export default function DashboardMetricCard({
                 <circle cx={lastX} cy={lastY} r="3.5" fill={color} stroke="var(--chart-dot-ring)" strokeWidth="2" />
               </g>
             )}
+          </svg>
+        ) : (
+          // Resolved with no plottable points: keep the diagonal no-data hatch
+          // and axis, but no shimmer and no message inside the chart.
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            className="w-full h-auto block select-none rounded-lg"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <defs>
+              <pattern id={`${gid}-empty-gap`} patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)">
+                <rect width="8" height="8" fill="rgba(148,163,184,0.08)" />
+                <line x1="0" y1="0" x2="0" y2="8" stroke="rgba(148,163,184,0.35)" strokeWidth="2" />
+              </pattern>
+            </defs>
+            <rect
+              x={M.left}
+              y={M.top}
+              width={INNER_W}
+              height={INNER_H}
+              fill={`url(#${gid}-empty-gap)`}
+            />
+            <line
+              x1={M.left}
+              x2={W - M.right}
+              y1={xAxisY}
+              y2={xAxisY}
+              stroke="var(--chart-grid-strong)"
+              strokeWidth="1"
+            />
           </svg>
         )}
       </div>

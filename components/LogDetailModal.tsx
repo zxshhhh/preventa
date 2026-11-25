@@ -30,6 +30,7 @@ import { peekBlob } from '@/lib/api/blobCache'
 import { formatNumber } from '@/lib/dashboardData'
 import EventTimeline from '@/components/EventTimeline'
 import { EVENT_RECOVERY_MS, findTriggerReading, sortEventReadings } from '@/lib/eventEvidence'
+import { SkeletonBlock } from '@/components/ui/Skeleton'
 
 interface Props {
   log: LogEntry
@@ -256,9 +257,9 @@ function CaptureImage({
     <figure className="overflow-hidden rounded-xl border border-white/10">
       <div className="relative flex aspect-video items-center justify-center">
         {state === 'loading' && (
-          <p role="status" className="text-xs text-gray-300">
-            Loading image…
-          </p>
+          <div role="status" aria-label="Loading capture image" className="h-full w-full overflow-hidden">
+            <SkeletonBlock className="aspect-video h-full w-full rounded-xl" />
+          </div>
         )}
 
         {state === 'error' && (

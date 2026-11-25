@@ -4,12 +4,15 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { useHydrated } from '@/lib/useHydrated'
 import { useOnline } from '@/lib/useOnline'
 import { isApiConfigured } from '@/lib/api/config'
+import { peekCache } from '@/lib/api/cache'
 import {
   fetchDeviceSettings,
   saveDeviceSettings,
+  type DeviceRemoteState,
   type DeviceSettingsSave,
   type DeviceSyncStatus,
 } from '@/lib/api/settings'
+import { SkeletonBar, SkeletonCircle } from '@/components/ui/Skeleton'
 import { formatFullDate, formatTime } from '@/lib/logReport'
 import { fetchResidences, type ResidenceEntry } from '@/lib/api/profile'
 import {
@@ -158,35 +161,48 @@ export default function SettingsContent() {
     camera: boolean | null
   }>({ interval: '', camera: null })
   const [sync, setSync] = useState<DeviceSyncStatus | null>(null)
+  const [settingsLoading, setSettingsLoading] = useState(false)
 
   useEffect(() => {
     if (!hydrated) return
 
     let cancelled = false
 
+    const applyRemote = (remote: DeviceRemoteState) => {
+      if (cancelled) return
+
+      const interval =
+        remote.sampleIntervalSec === null
+          ? ''
+          : String(remote.sampleIntervalSec)
+
+      setIntervalInput(interval)
+      setCameraEnabled(remote.cameraEnabled)
+      setRemoteBaseline({
+        interval,
+        camera: remote.cameraEnabled,
+      })
+      setSync(remote.sync)
+    }
+
     const id = setTimeout(() => {
-      if (isApiConfigured()) {
-        void fetchDeviceSettings()
-          .then((remote) => {
-            if (cancelled || !remote) return
+      if (!isApiConfigured()) return
 
-            const interval =
-              remote.sampleIntervalSec === null
-                ? ''
-                : String(remote.sampleIntervalSec)
+      // A cached hit resolves synchronously — seed it without a shimmer flash.
+      const cached = peekCache<DeviceRemoteState>('device-settings')
+      if (cached) applyRemote(cached)
+      else setSettingsLoading(true)
 
-            setIntervalInput(interval)
-            setCameraEnabled(remote.cameraEnabled)
-            setRemoteBaseline({
-              interval,
-              camera: remote.cameraEnabled,
-            })
-            setSync(remote.sync)
-          })
-          .catch(() => {
-            /* keep device settings at their initial values if the fetch fails */
-          })
-      }
+      void fetchDeviceSettings()
+        .then((remote) => {
+          if (remote) applyRemote(remote)
+        })
+        .catch(() => {
+          /* keep device settings at their initial values if the fetch fails */
+        })
+        .finally(() => {
+          if (!cancelled) setSettingsLoading(false)
+        })
     }, 0)
 
     return () => {
@@ -316,6 +332,7 @@ export default function SettingsContent() {
         valid={deviceIntervalValid}
         sync={sync}
         offline={!online}
+        loading={settingsLoading}
         onIntervalChange={setIntervalInput}
         onCameraChange={setCameraEnabled}
         onSave={saveDevice}
@@ -475,12 +492,33 @@ function AccessibilitySection() {
 function SyncBanner({
   sync,
   offline,
+  loading,
   onRefresh,
 }: {
   sync: DeviceSyncStatus | null
   offline: boolean
+  loading: boolean
   onRefresh: () => void
 }) {
+  if (loading) {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
+      >
+        <span className="sr-only">Loading device settings…</span>
+
+        <div className="flex items-center gap-2 min-w-0">
+          <SkeletonCircle className="w-2 h-2" />
+          <SkeletonBar className="h-3 w-48 max-w-[60vw]" />
+        </div>
+
+        <SkeletonBar className="h-7 w-28 rounded-lg" />
+      </div>
+    )
+  }
+
   const pending = sync?.pending ?? null
 
   const style =
@@ -551,6 +589,7 @@ function DeviceReportingSection({
   valid,
   sync,
   offline,
+  loading,
   onIntervalChange,
   onCameraChange,
   onSave,
@@ -562,6 +601,7 @@ function DeviceReportingSection({
   valid: boolean
   sync: DeviceSyncStatus | null
   offline: boolean
+  loading: boolean
   onIntervalChange: (value: string) => void
   onCameraChange: (value: boolean) => void
   onSave: () => void
@@ -581,88 +621,119 @@ function DeviceReportingSection({
       </p>
 
       <div className="mt-4">
-        <SyncBanner sync={sync} offline={offline} onRefresh={onRefresh} />
+        <SyncBanner
+          sync={sync}
+          offline={offline}
+          loading={loading}
+          onRefresh={onRefresh}
+        />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-        <div className="rounded-xl border border-white/10 p-3 flex flex-col gap-2">
-          <p className="text-xs font-bold text-gray-100">
-            Cloud reporting interval
-          </p>
-
-          <label className="flex items-center gap-2 text-xs font-bold text-gray-400">
-            <span className="shrink-0">SECONDS</span>
-
-            <input
-              type="number"
-              min={2}
-              max={60}
-              step={1}
-              placeholder="firmware default"
-              value={intervalInput}
-              onChange={(e) => onIntervalChange(e.target.value)}
-              readOnly={offline}
-              aria-label="Cloud reporting interval in seconds"
-              aria-invalid={!valid}
-              aria-describedby="reporting-interval-help"
-              className="input-profile w-full flex-1"
-            />
-          </label>
-
-          {valid ? (
-            <p id="reporting-interval-help" className="text-xs text-gray-500 leading-relaxed">
-              2–60 whole seconds. Controls routine cloud uploads only — local
-              acquisition stays on its nominal two-second schedule. Leave
-              empty to restore the firmware default.
-            </p>
-          ) : (
-            <p id="reporting-interval-help" role="alert" className="text-xs font-bold text-red-400">
-              Enter a whole number between 2 and 60, or leave empty
-            </p>
-          )}
-        </div>
-
-        <div className="rounded-xl border border-white/10 p-3 flex items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-bold text-gray-100">
-              Camera enabled
-            </p>
-
-            <p className="text-xs text-gray-500 leading-relaxed mt-1">
-              Turns the ESP32-CAM snapshot capture on or off on the board.
-            </p>
+        {loading ? (
+          <div className="rounded-xl border border-white/10 p-3 flex flex-col gap-2">
+            <SkeletonBar className="h-3 w-36" />
+            <SkeletonBar className="h-10 w-full rounded-lg" />
+            <SkeletonBar className="h-3 w-11/12" />
+            <SkeletonBar className="h-3 w-3/5" />
           </div>
+        ) : (
+          <div className="rounded-xl border border-white/10 p-3 flex flex-col gap-2">
+            <p className="text-xs font-bold text-gray-100">
+              Cloud reporting interval
+            </p>
 
-          <button
-            type="button"
-            role="switch"
-            aria-checked={cameraOn}
-            aria-label="Camera enabled"
-            onClick={() => onCameraChange(!cameraOn)}
-            disabled={offline}
-            className={
-              'relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-(--focus-ring) focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) ' +
-              (cameraOn
-                ? 'bg-(--secondary-color)'
-                : 'bg-white/15 border border-white/40')
-            }
-          >
-            <span
+            <label className="flex items-center gap-2 text-xs font-bold text-gray-400">
+              <span className="shrink-0">SECONDS</span>
+
+              <input
+                type="number"
+                min={2}
+                max={60}
+                step={1}
+                placeholder="firmware default"
+                value={intervalInput}
+                onChange={(e) => onIntervalChange(e.target.value)}
+                readOnly={offline}
+                aria-label="Cloud reporting interval in seconds"
+                aria-invalid={!valid}
+                aria-describedby="reporting-interval-help"
+                className="input-profile w-full flex-1"
+              />
+            </label>
+
+            {valid ? (
+              <p id="reporting-interval-help" className="text-xs text-gray-500 leading-relaxed">
+                2–60 whole seconds. Controls routine cloud uploads only — local
+                acquisition stays on its nominal two-second schedule. Leave
+                empty to restore the firmware default.
+              </p>
+            ) : (
+              <p id="reporting-interval-help" role="alert" className="text-xs font-bold text-red-400">
+                Enter a whole number between 2 and 60, or leave empty
+              </p>
+            )}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="rounded-xl border border-white/10 p-3 flex items-center justify-between gap-3">
+            <div className="flex-1 flex flex-col gap-2">
+              <SkeletonBar className="h-3 w-28" />
+              <SkeletonBar className="h-3 w-4/5" />
+            </div>
+
+            <SkeletonBar className="h-6 w-11 rounded-full" />
+          </div>
+        ) : (
+          <div className="rounded-xl border border-white/10 p-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold text-gray-100">
+                Camera enabled
+              </p>
+
+              <p className="text-xs text-gray-500 leading-relaxed mt-1">
+                Turns the ESP32-CAM snapshot capture on or off on the board.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              role="switch"
+              aria-checked={cameraOn}
+              aria-label="Camera enabled"
+              onClick={() => onCameraChange(!cameraOn)}
+              disabled={offline}
               className={
-                'absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ' +
-                (cameraOn ? 'translate-x-5' : 'translate-x-0')
+                'relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-(--focus-ring) focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) ' +
+                (cameraOn
+                  ? 'bg-(--secondary-color)'
+                  : 'bg-white/15 border border-white/40')
               }
-            />
-          </button>
-        </div>
+            >
+              <span
+                className={
+                  'absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ' +
+                  (cameraOn ? 'translate-x-5' : 'translate-x-0')
+                }
+              />
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2 mt-4">
         <button
           type="button"
           onClick={onSave}
-          disabled={!valid || !dirty || offline}
-          title={offline ? 'Reconnect to make changes' : undefined}
+          disabled={loading || !valid || !dirty || offline}
+          title={
+            offline
+              ? 'Reconnect to make changes'
+              : loading
+                ? 'Waiting for device settings'
+                : undefined
+          }
           className="btn-primary btn-md min-w-32 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           SAVE DEVICE SETTINGS
@@ -683,11 +754,12 @@ function DeviceReportingSection({
 }
 
 function DeviceManagementSection() {
-  const { devices, refresh } = useDevices()
+  const { devices, refresh, loading: devicesLoading } = useDevices()
   const { pushToast } = useSensors()
   const online = useOnline()
 
   const [residences, setResidences] = useState<ResidenceEntry[]>([])
+  const [residencesLoading, setResidencesLoading] = useState(false)
   const [hardwareId, setHardwareId] = useState('')
   const [residenceChoice, setResidenceChoice] = useState<string>('')
   const [newAddress, setNewAddress] = useState('')
@@ -705,16 +777,27 @@ function DeviceManagementSection() {
 
     let cancelled = false
 
-    void fetchResidences()
-      .then((list) => {
-        if (!cancelled) setResidences(list)
-      })
-      .catch(() => {
-        /* the register form still works with a new-residence address */
-      })
+    // Deferred so the first render matches the prerendered HTML and setState
+    // never runs synchronously inside the effect body.
+    const id = setTimeout(() => {
+      if (cancelled) return
+      setResidencesLoading(true)
+
+      void fetchResidences()
+        .then((list) => {
+          if (!cancelled) setResidences(list)
+        })
+        .catch(() => {
+          /* the register form still works with a new-residence address */
+        })
+        .finally(() => {
+          if (!cancelled) setResidencesLoading(false)
+        })
+    }, 0)
 
     return () => {
       cancelled = true
+      clearTimeout(id)
     }
   }, [])
 
@@ -889,22 +972,29 @@ function DeviceManagementSection() {
             Residence
           </p>
 
-          <select
-            value={residenceChoice}
-            onChange={(e) => setResidenceChoice(e.target.value)}
-            aria-label="Residence"
-            className="input-profile w-full"
-          >
-            <option value="">No residence selected</option>
+          {residencesLoading ? (
+            <div role="status" className="h-10">
+              <span className="sr-only">Loading residences…</span>
+              <SkeletonBar className="h-10 w-full rounded-lg" />
+            </div>
+          ) : (
+            <select
+              value={residenceChoice}
+              onChange={(e) => setResidenceChoice(e.target.value)}
+              aria-label="Residence"
+              className="input-profile w-full"
+            >
+              <option value="">No residence selected</option>
 
-            {residences.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.address || `Residence ${r.id}`}
-              </option>
-            ))}
+              {residences.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.address || `Residence ${r.id}`}
+                </option>
+              ))}
 
-            <option value="new">+ New residence…</option>
-          </select>
+              <option value="new">+ New residence…</option>
+            </select>
+          )}
         </div>
 
         <div className="rounded-xl border border-white/10 p-3 flex flex-col gap-2">
@@ -1019,7 +1109,29 @@ function DeviceManagementSection() {
 
       {/* Registered devices with removal */}
       <div className="mt-4 flex flex-col gap-2">
-        {devices.length === 0 ? (
+        {devicesLoading && devices.length === 0 ? (
+          <>
+            <span role="status" className="sr-only">
+              Loading devices…
+            </span>
+
+            {['row-1', 'row-2', 'row-3'].map((row) => (
+              <div
+                key={row}
+                className="flex items-center gap-3 p-3 rounded-xl bg-white/5"
+              >
+                <SkeletonCircle className="w-2.5 h-2.5" />
+
+                <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+                  <SkeletonBar className="h-3.5 w-32" />
+                  <SkeletonBar className="h-3 w-24" />
+                </div>
+
+                <SkeletonBar className="h-7 w-7 rounded-lg" />
+              </div>
+            ))}
+          </>
+        ) : devices.length === 0 ? (
           <p className="text-xs text-gray-500">
             No devices on this account yet.
           </p>

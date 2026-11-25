@@ -12,6 +12,9 @@ import { useOnline } from '@/lib/useOnline'
 export type EventLevel = 'WARNING' | 'CRITICAL'
 export type ToastLevel = EventLevel | 'SUCCESS'
 
+/** Lifecycle of the dashboard's live WebSocket — independent of REST readings. */
+export type LiveStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline'
+
 export interface SensorEvent {
   id: string
   sensorId: SensorId
@@ -35,6 +38,10 @@ interface SensorsContextType {
   series: SensorSeries[]
   /** Fusion fields from the most recent live reading — used to react to tier transitions. */
   lastFusion: FusionData | null
+  /** Dashboard-to-backend live socket state; does not imply the device is transmitting. */
+  liveStatus: LiveStatus
+  /** Time of the newest reading delivered over the WebSocket (never from REST). */
+  lastWsReadingAt: number | null
   /** Timestamp of the newest reading currently shown (live or restored from disk). */
   liveSavedAt: number | null
   notifications: SensorEvent[]
@@ -140,6 +147,8 @@ function tryBrowserNotify(title: string, body: string) {
 export function SensorProvider({ children }: { children: ReactNode }) {
   const [series, setSeries] = useState<SensorSeries[]>([])
   const [lastFusion, setLastFusion] = useState<FusionData | null>(null)
+  const [liveStatus, setLiveStatus] = useState<LiveStatus>('idle')
+  const [lastWsReadingAt, setLastWsReadingAt] = useState<number | null>(null)
   const [liveSavedAt, setLiveSavedAt] = useState<number | null>(null)
   const [notifications, setNotifications] = useState<SensorEvent[]>(loadStoredEvents)
   const [toasts, setToasts] = useState<SensorToast[]>([])
@@ -147,6 +156,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
   const seenEventsRef = useRef<Set<string>>(new Set(loadStoredEvents().map((e) => e.id)))
   const wsRef = useRef<WebSocket | null>(null)
   const wsReconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const wsGenerationRef = useRef(0)
   const reconnectRef = useRef<() => void>(() => {})
   const lastSnapshotWriteRef = useRef(0)
   const wasOfflineRef = useRef(false)
@@ -225,14 +235,24 @@ export function SensorProvider({ children }: { children: ReactNode }) {
     let cancelled = false
 
     async function connectWS() {
-      if (isOffline()) return
+      if (isOffline()) {
+        setLiveStatus('offline')
+        return
+      }
       const token = localStorage.getItem('preventa.token')
-      if (!token) return
+      if (!token) {
+        setLiveStatus('idle')
+        return
+      }
+
+      const generation = ++wsGenerationRef.current
+      setLiveStatus('connecting')
 
       const ws = connectLiveTelemetry(
         token,
         (points: SensorPoint, fusion: FusionData) => {
-          if (cancelled) return
+          if (cancelled || generation !== wsGenerationRef.current) return
+          setLastWsReadingAt(Date.now())
           pushPoint('mq7', points.mq7)
           pushPoint('dht22', points.dht22)
           pushPoint('acs712', points.acs712)
@@ -242,14 +262,25 @@ export function SensorProvider({ children }: { children: ReactNode }) {
           rebuildSeries()
         },
         (code) => {
-          if (cancelled || isOffline()) return
+          if (cancelled || generation !== wsGenerationRef.current || isOffline()) return
+          setLiveStatus('reconnecting')
+          setLastWsReadingAt(null)
           if (code === 4401) {
             void refreshAccessToken().then((newToken) => {
-              if (newToken && !cancelled) connectWS()
+              if (generation !== wsGenerationRef.current || cancelled) return
+              if (newToken) connectWS()
+              else setLiveStatus('idle')
             })
           } else {
             scheduleReconnect()
           }
+        },
+        () => {
+          if (cancelled || generation !== wsGenerationRef.current) return
+          // A fresh session must prove itself with a new reading before the
+          // dashboard may show a live device again.
+          setLastWsReadingAt(null)
+          setLiveStatus('connected')
         }
       )
       wsRef.current = ws
@@ -322,6 +353,8 @@ export function SensorProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true
+      // Invalidate callbacks from this socket before closing it.
+      wsGenerationRef.current += 1
       if (wsRef.current) wsRef.current.close()
       if (wsReconnectTimeoutRef.current) clearTimeout(wsReconnectTimeoutRef.current)
       reconnectRef.current = () => {}
@@ -341,6 +374,9 @@ export function SensorProvider({ children }: { children: ReactNode }) {
       return
     }
     wasOfflineRef.current = true
+    // The exposed status is derived from `online`, so no state update is needed
+    // here; invalidate this socket so late callbacks cannot restore live state.
+    wsGenerationRef.current += 1
     if (wsRef.current) wsRef.current.close()
     wsRef.current = null
     if (wsReconnectTimeoutRef.current) clearTimeout(wsReconnectTimeoutRef.current)
@@ -470,9 +506,34 @@ export function SensorProvider({ children }: { children: ReactNode }) {
     return () => timers.forEach(clearTimeout)
   }, [toasts, dismissToast, toastsPaused])
 
+  const effectiveLiveStatus: LiveStatus = online ? liveStatus : 'offline'
   const value = useMemo(
-    () => ({ series, lastFusion, liveSavedAt, notifications, unreadCount, markAllRead, toasts, dismissToast, pushToast }),
-    [series, lastFusion, liveSavedAt, notifications, unreadCount, markAllRead, toasts, dismissToast, pushToast],
+    () => ({
+      series,
+      lastFusion,
+      liveStatus: effectiveLiveStatus,
+      lastWsReadingAt,
+      liveSavedAt,
+      notifications,
+      unreadCount,
+      markAllRead,
+      toasts,
+      dismissToast,
+      pushToast,
+    }),
+    [
+      series,
+      lastFusion,
+      effectiveLiveStatus,
+      lastWsReadingAt,
+      liveSavedAt,
+      notifications,
+      unreadCount,
+      markAllRead,
+      toasts,
+      dismissToast,
+      pushToast,
+    ],
   )
 
   return (

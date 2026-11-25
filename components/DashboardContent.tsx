@@ -36,7 +36,7 @@ export default function DashboardContent() {
 
   // Historical ranges come from the in-memory API cache; the hook re-runs the
   // cached fetch on the existing 60 s cadence and re-renders when it refreshes.
-  const { data: remoteSnapshot, savedAt: savedRangeAt, refreshing } = useCachedQuery<RangeSnapshot>(
+  const { data: remoteSnapshot, savedAt: savedRangeAt } = useCachedQuery<RangeSnapshot>(
     range === '1H' ? null : `range:${range}`,
     () => fetchRangeRaw(range),
     {
@@ -88,14 +88,12 @@ export default function DashboardContent() {
       <DashboardHeader />
       <RecentReportLog />
       <DashboardSensorCards
-        series={series}
         chartSeries={chartSeries}
         range={range}
         onRangeChange={setRange}
         cachedAt={range === '1H' ? liveSavedAt : savedRangeAt}
         window={chartWindow}
         empty={chartResolved && chartEmpty}
-        refreshing={range !== '1H' && refreshing}
       />
     </div>
   )

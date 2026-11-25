@@ -12,6 +12,7 @@ import { fetchLogs, LOGS_CACHE_KEY } from '@/lib/api/reports'
 import { isApiConfigured } from '@/lib/api/config'
 import { CACHE_TAGS, CACHE_TTL } from '@/lib/api/cache'
 import { useCachedQuery } from '@/lib/api/useCachedQuery'
+import { SkeletonBar } from '@/components/ui/Skeleton'
 
 const EMPTY_LOGS: LogEntry[] = []
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
@@ -133,7 +134,12 @@ export default function LogConsole() {
       <div className="flex flex-col items-start mb-4 gap-1">
         <h1 className="font-bold text-2xl">Report Logs</h1>
         <p className="text-sm text-gray-400">Logs event archive by month. choose a year, then select a month to view its logs.</p>
-        {loading && <span className="text-xs font-semibold text-amber-400">Loading live logs...</span>}
+        {loading && !showSkeleton && (
+          <span className="inline-flex items-center gap-2 text-xs font-semibold text-amber-400">
+            Loading live logs...
+            <SkeletonBar className="h-2.5 w-10 rounded-full" />
+          </span>
+        )}
         {hydrated && yearKeys.length > 0 && (
           <label className="mt-2 flex items-center gap-2 text-xs font-semibold text-gray-400">
             YEAR

@@ -7,7 +7,6 @@ import {
   CARD_ORDER,
   CHART_RANGES,
   CHART_VIEW,
-  NO_DATA_GAP_MESSAGE,
   SENSORS,
   alignedIndex,
   chartGeom,
@@ -25,6 +24,7 @@ interface Props {
 
 const PANEL_W = 288
 const V_GAP = 18
+const NO_AVAILABLE_DATA = 'No available data'
 
 const subscribeNoop = () => () => {}
 const clientTrue = () => true
@@ -133,7 +133,7 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
         unit: cfg.unit,
         color: cfg.color,
         missing,
-        label: missing ? 'No data' : formatNumber(p.value as number, cfg.decimals),
+        label: missing ? NO_AVAILABLE_DATA : formatNumber(p.value as number, cfg.decimals),
         ...toScreen(geom, ai, valueForY, rect),
         active: id === hover.cardId,
       },
@@ -145,15 +145,15 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
   const hoveredMissing = !(typeof hoveredPoint.value === 'number' && Number.isFinite(hoveredPoint.value))
 
   const announce = hoveredMissing
-    ? `${hoveredCfg.name}, ${NO_DATA_GAP_MESSAGE}, ${timestamp}`
+    ? `${hoveredCfg.name}, ${NO_AVAILABLE_DATA}, ${timestamp}`
     : `${hoveredCfg.name} ${formatNumber(hoveredPoint.value as number, hoveredCfg.decimals)} ${hoveredCfg.unit}, ${timestamp}`
 
   const vw = window.innerWidth
   const vh = window.innerHeight
 
   const margin = 12
-  // Comfortable height for the 4-reading detail panel (avoids unnecessary scrollbars).
-  const COMFORTABLE_H = 250
+  // The no-data panel is a single line; the detail panel needs room for four rows.
+  const COMFORTABLE_H = hoveredMissing ? 120 : 250
   const panelWidth = Math.min(PANEL_W, vw - margin * 2)
 
   // Keep the panel under the point, centered horizontally and clamped on-screen.
@@ -244,34 +244,37 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
                 </p>
               </div>
             </div>
-            {hoveredMissing && (
-              <p className="mt-2 text-xs font-semibold text-gray-300">{NO_DATA_GAP_MESSAGE}</p>
+            {hoveredMissing ? (
+              <p role="status" className="mt-2 text-sm font-semibold text-gray-300">
+                {NO_AVAILABLE_DATA}
+              </p>
+            ) : (
+              <div className="mt-2 sm:mt-3 space-y-1">
+                {rows.map((r) => (
+                  <div
+                    key={r.id}
+                    className={
+                      'flex items-center gap-2 rounded-lg px-2 py-1.5 ' +
+                      (r.active ? 'bg-white/5' : '')
+                    }
+                  >
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: r.missing ? 'rgba(148,163,184,0.7)' : r.color }}
+                    />
+                    <span className="min-w-0 truncate text-xs font-semibold text-gray-400">
+                      {r.name}
+                    </span>
+                    <span className={`ml-auto text-sm sm:text-base font-extrabold ${r.missing ? 'text-gray-400 text-xs sm:text-xs' : 'tnum text-gray-100'}`}>
+                      {r.label}
+                    </span>
+                    <span className="w-12 shrink-0 text-right text-xs font-bold text-gray-500">
+                      {r.unit}
+                    </span>
+                  </div>
+                ))}
+              </div>
             )}
-            <div className="mt-2 sm:mt-3 space-y-1">
-              {rows.map((r) => (
-                <div
-                  key={r.id}
-                  className={
-                    'flex items-center gap-2 rounded-lg px-2 py-1.5 ' +
-                    (r.active ? 'bg-white/5' : '')
-                  }
-                >
-                  <span
-                    className="h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: r.missing ? 'rgba(148,163,184,0.7)' : r.color }}
-                  />
-                  <span className="min-w-0 truncate text-xs font-semibold text-gray-400">
-                    {r.name}
-                  </span>
-                  <span className={`ml-auto text-sm sm:text-base font-extrabold ${r.missing ? 'text-gray-400 text-xs sm:text-xs' : 'tnum text-gray-100'}`}>
-                    {r.missing ? 'No data in this time range' : r.label}
-                  </span>
-                  <span className="w-12 shrink-0 text-right text-xs font-bold text-gray-500">
-                    {r.unit}
-                  </span>
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       </div>
