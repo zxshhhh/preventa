@@ -126,7 +126,7 @@ function readingValue(
     }
   }
 
-  return '—'
+  return 'Unavailable'
 }
 
 function EventReadingCard({ reading }: { reading: ReadingEntry }) {
@@ -271,7 +271,7 @@ function CaptureImage({
         {state === 'ready' && imageUrl && (
           <Image
             src={imageUrl}
-            alt={`Camera snapshot near the event at ${time} — ${classification}${confidence}`}
+            alt={`Camera snapshot near the event at ${time}. ${classification}${confidence}`}
             fill
             unoptimized
             loading={index === 0 ? 'eager' : 'lazy'}
@@ -474,7 +474,7 @@ function EventEvidence({
         )}
         {readingState === 'offline' && (
           <p role="status" className="text-sm text-(--amber-indicator)">
-            Offline — event readings need a connection. Last saved evidence stays visible where available.
+            Offline. Event readings need a connection. Saved evidence stays visible where available.
           </p>
         )}
         {readingState === 'missing' && (
@@ -512,7 +512,7 @@ function EventEvidence({
         )}
         {captureState === 'offline' && (
           <p role="status" className="text-sm text-(--amber-indicator) text-center">
-            Offline — camera snapshots are unavailable until you reconnect.
+            Offline. Camera snapshots will return when you reconnect.
           </p>
         )}
         {captureState === 'missing' && (
@@ -643,20 +643,20 @@ export default function LogDetailModal({ log, onClose }: Props) {
           <dl className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             <DetailItem
               label="Severity"
-              value={tier > 0 ? `Tier ${tier} (${tierLabel})` : '—'}
+              value={tier > 0 ? `Tier ${tier} (${tierLabel})` : 'Unavailable'}
             />
-            <DetailItem label="Device fire classification" value={currentEvent.peakFireType || '—'} />
+            <DetailItem label="Device fire classification" value={currentEvent.peakFireType || 'Unavailable'} />
             <DetailItem
               label="Duration"
               value={
                 currentEvent.durationSeconds !== undefined &&
                 currentEvent.durationSeconds !== null
                   ? `${currentEvent.durationSeconds}s`
-                  : '—'
+                  : 'Unavailable'
               }
               numeric
             />
-            <DetailItem label="Status" value={currentEvent.eventStatus || '—'} />
+            <DetailItem label="Status" value={currentEvent.eventStatus || 'Unavailable'} />
             <DetailItem
               label="Start time"
               value={formatTime(log.timestamp)}

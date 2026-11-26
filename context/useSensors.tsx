@@ -46,6 +46,8 @@ interface SensorsContextType {
   liveSavedAt: number | null
   /** True while the one-time 1H seed is still delivering paged readings. */
   liveSeeding: boolean
+  /** True once the one-time 1H seed has settled (with or without readings). */
+  liveReady: boolean
   notifications: SensorEvent[]
   unreadCount: number
   markAllRead: () => void
@@ -153,6 +155,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
   const [lastWsReadingAt, setLastWsReadingAt] = useState<number | null>(null)
   const [liveSavedAt, setLiveSavedAt] = useState<number | null>(null)
   const [liveSeeding, setLiveSeeding] = useState(false)
+  const [liveReady, setLiveReady] = useState(false)
   const [notifications, setNotifications] = useState<SensorEvent[]>(loadStoredEvents)
   const [toasts, setToasts] = useState<SensorToast[]>([])
 
@@ -378,7 +381,12 @@ export function SensorProvider({ children }: { children: ReactNode }) {
       } catch {
         /* seed is best-effort — live stream continues regardless */
       } finally {
-        if (!cancelled) setLiveSeeding(false)
+        if (!cancelled) {
+          setLiveSeeding(false)
+          // An empty (or failed) seed is a resolved "no data" result, not an
+          // endless loading state — LIVE must settle like the history tabs.
+          setLiveReady(true)
+        }
       }
     }
 
@@ -565,6 +573,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
       lastWsReadingAt,
       liveSavedAt,
       liveSeeding,
+      liveReady,
       notifications,
       unreadCount,
       markAllRead,
@@ -579,6 +588,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
       lastWsReadingAt,
       liveSavedAt,
       liveSeeding,
+      liveReady,
       notifications,
       unreadCount,
       markAllRead,

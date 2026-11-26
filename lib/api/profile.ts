@@ -183,7 +183,7 @@ export async function createResidence(changes: ResidenceChanges): Promise<Reside
   if (changes.latitude !== undefined && changes.latitude !== null && changes.latitude !== '') body.latitude = changes.latitude
   if (changes.longitude !== undefined && changes.longitude !== null && changes.longitude !== '') body.longitude = changes.longitude
   const data = await apiPost<Residence>(ENDPOINTS.residences, body)
-  if (!data?.id) throw new Error('Residence creation failed — no residence returned')
+  if (!data?.id) throw new Error('Residence creation failed. No residence returned.')
   invalidateTags([CACHE_TAGS.profile])
   return normalizeResidence(data)
 }
@@ -194,7 +194,7 @@ export async function updateResidence(id: number, changes: ResidenceChanges): Pr
   if (changes.latitude !== undefined) body.latitude = changes.latitude === '' ? null : changes.latitude
   if (changes.longitude !== undefined) body.longitude = changes.longitude === '' ? null : changes.longitude
   const data = await apiPatch<Residence>(ENDPOINTS.residence(id), body)
-  if (!data?.id) throw new Error('Residence update failed — no residence returned')
+  if (!data?.id) throw new Error('Residence update failed. No residence returned.')
   invalidateTags([CACHE_TAGS.profile])
   return normalizeResidence(data)
 }

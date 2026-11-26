@@ -11,6 +11,7 @@ import {
   contiguousSegments,
   formatNumber,
   gapRanges,
+  isWithinChartRange,
   lastRealPoint,
   loadingRanges,
   smoothPath,
@@ -439,6 +440,8 @@ function DashboardMetricCard({
               if (p === realLast) return null
               const i = chartPoints.indexOf(p)
               if (i < 0) return null
+              // An off-axis reading has no visible dot; the line stays clipped by the SVG.
+              if (!isWithinChartRange(p.value, geom)) return null
               const cx = geom.xAt(i)
               const cy = geom.yAt(p.value)
               return (
@@ -448,7 +451,7 @@ function DashboardMetricCard({
                 </g>
               )
             })}
-            {realLast && geom && lastRealIdx >= 0 && (
+            {realLast && geom && lastRealIdx >= 0 && isWithinChartRange(realLast.value, geom) && (
               <g>
                 {pulse && <circle className="dot-ping" cx={lastX} cy={lastY} r="4" fill={color} />}
                 <circle cx={lastX} cy={lastY} r="8" fill={color} opacity="0.18" />

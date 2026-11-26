@@ -33,7 +33,7 @@ export interface CachedQuery<T> {
  */
 export function useCachedQuery<T>(
   key: string | null,
-  fetcher: () => Promise<T>,
+  fetcher: (fresh: boolean) => Promise<T>,
   options: UseCachedQueryOptions<T>,
 ): CachedQuery<T> {
   const hydrated = useHydrated()
@@ -77,7 +77,7 @@ export function useCachedQuery<T>(
       if (!k) return
       if (fresh || dataRef.current == null) setRefreshing(true)
       try {
-        const value = await cachedFetch<T>(k, fetcherRef.current, { ...optionsRef.current, fresh })
+        const value = await cachedFetch<T>(k, () => fetcherRef.current(fresh), { ...optionsRef.current, fresh })
         dataRef.current = value
         setData(value)
         setProgress(null)

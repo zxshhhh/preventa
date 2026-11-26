@@ -49,7 +49,7 @@ export default function ProfileContent() {
   const [editDraft, setEditDraft] = useState<ContactDraft>(EMPTY_DRAFT)
   const [confirmDeleteId, setConfirmDeleteId] = useState<ProfileContact['id'] | null>(null)
 
-  const { data: profile } = useCachedQuery<ProfileData | null>(
+  const { data: profile, error: profileError, refresh: refreshProfile } = useCachedQuery<ProfileData | null>(
     PROFILE_CACHE_KEY,
     () => fetchProfile(),
     {
@@ -108,7 +108,7 @@ export default function ProfileContent() {
         setAdding(false)
         pushToast('Contact added', `${contact.name} was added to this residence.`)
       })
-      .catch(() => pushToast('Save failed', 'Could not reach the API — contact not added.'))
+      .catch(() => pushToast('Save failed', 'We could not save the contact. Please check your connection and try again.'))
   }
 
   const startEdit = (contact: ProfileContact) => {
@@ -139,7 +139,7 @@ export default function ProfileContent() {
     }
     void updateContact(original.id, changes)
       .then((updated) => finish(updated))
-      .catch(() => pushToast('Save failed', 'Could not reach the API — edits kept for retry.'))
+      .catch(() => pushToast('Save failed', 'We could not save your changes. Your edits are still here, so you can try again.'))
   }
 
   const removeContact = (contact: ProfileContact) => {
@@ -155,11 +155,11 @@ export default function ProfileContent() {
     }
     void deleteContact(contact.id)
       .then(finish)
-      .catch(() => pushToast('Delete failed', 'Could not reach the API — contact kept.'))
+      .catch(() => pushToast('Delete failed', 'We could not remove the contact. It is still in your list.'))
   }
 
   const recipient = activeRecipient(contacts)
-  const hasNoValidContact = contactsLoaded && !contacts.some(isValidRecipient)
+  const hasNoValidContact = contactsLoaded && !profileError && !contacts.some(isValidRecipient)
 
   return (
     <div className="flex flex-col gap-6">
@@ -183,8 +183,18 @@ export default function ProfileContent() {
           </div>
           {!online && (
             <p className="text-xs font-semibold text-(--amber-indicator) mb-3">
-              Offline — contacts are read-only until you reconnect.
+              You are offline. You can view contacts, but you cannot change them until you reconnect.
             </p>
+          )}
+          {Boolean(profileError) && (
+            <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-(--red-indicator)/30 bg-(--red-indicator)/10 px-3 py-2 mb-3">
+              <span className="text-xs font-semibold text-(--red-indicator)">
+                We could not load your contacts. Please try again.
+              </span>
+              <button onClick={() => void refreshProfile()} className="btn-ghost btn-sm">
+                RETRY
+              </button>
+            </div>
           )}
           {recipient && (
             <p className="text-xs text-gray-400 mb-3">
@@ -195,7 +205,7 @@ export default function ProfileContent() {
           )}
           {hasNoValidContact && (
             <p className="text-xs font-semibold text-amber-400 bg-amber-400/10 border border-amber-400/25 rounded-lg px-3 py-2 mb-3">
-              No valid contact left — automatic SMS stays disabled until a contact is added and synced.
+              Automatic SMS is paused because no contact has a phone number yet. Add a contact with a number to turn it back on.
             </p>
           )}
           <div className="space-y-3">
@@ -255,8 +265,10 @@ export default function ProfileContent() {
                     />
                   )
                 })}
-                {contactsLoaded && contacts.length === 0 && (
-                  <p className="text-xs text-gray-500">No contacts yet — add one to receive emergency SMS.</p>
+                {contactsLoaded && contacts.length === 0 && !profileError && (
+                  <p className="text-xs text-gray-500">
+                    No contact information yet. Add your first emergency contact with a phone number so we can send SMS alerts when an incident happens.
+                  </p>
                 )}
               </>
             )}
@@ -365,7 +377,7 @@ function ContactRow({ contact, isRecipient, confirming, offline, onDelete, onEdi
       <div className="flex-1 min-w-0">
         <p className="text-sm font-bold text-gray-100 truncate">{contact.name}</p>
         <p className={'text-xs truncate ' + (invalid ? 'text-amber-400 font-semibold' : 'text-gray-500')}>
-          {invalid ? 'Missing number — not SMS-eligible' : contact.phone}
+          {invalid ? 'Missing phone number. This contact cannot receive SMS alerts.' : contact.phone}
         </p>
       </div>
       <div className="flex flex-col items-end gap-1 shrink-0">
@@ -549,7 +561,7 @@ function ResidencesSection() {
         refresh()
         pushToast('Residence added', `${address || `Residence ${entry.id}`} was created.`)
       })
-      .catch(() => pushToast('Save failed', 'Could not reach the API — residence not added.'))
+      .catch(() => pushToast('Save failed', 'We could not add the residence. Please check your connection and try again.'))
   }
 
   const saveEdit = (entry: ResidenceEntry) => {
@@ -573,7 +585,7 @@ function ResidencesSection() {
     }
     void updateResidence(entry.id, changes)
       .then(finish)
-      .catch(() => pushToast('Save failed', 'Could not reach the API — edits kept for retry.'))
+      .catch(() => pushToast('Save failed', 'We could not save your changes. Your edits are still here, so you can try again.'))
   }
 
   const removeResidence = (entry: ResidenceEntry) => {
@@ -588,7 +600,7 @@ function ResidencesSection() {
         refresh()
         pushToast('Residence removed', `${entry.address || `Residence ${entry.id}`} was deleted along with its contacts.`)
       })
-      .catch(() => pushToast('Delete failed', 'Could not reach the API — residence kept.'))
+      .catch(() => pushToast('Delete failed', 'We could not remove the residence. It is still in your list.'))
   }
 
   return (
@@ -601,7 +613,7 @@ function ResidencesSection() {
           </p>
           {!online && (
             <p className="text-xs font-semibold text-(--amber-indicator) mt-1">
-              Offline — residences are read-only until you reconnect.
+              You are offline. You can view residences, but you cannot change them until you reconnect.
             </p>
           )}
           {Boolean(error) && (
@@ -610,7 +622,7 @@ function ResidencesSection() {
               className="flex items-center justify-between gap-3 rounded-lg border border-(--red-indicator)/30 bg-(--red-indicator)/10 px-3 py-2 mt-2"
             >
               <span className="text-xs font-semibold text-(--red-indicator)">
-                Could not load residences.
+                We could not load your residences. Please try again.
               </span>
               <button onClick={() => void refreshResidences()} className="btn-ghost btn-sm">
                 RETRY
@@ -664,7 +676,11 @@ function ResidencesSection() {
       {!loaded ? (
         <ResidenceSkeletonRows />
       ) : residences.length === 0 ? (
-        <p className="text-xs text-gray-500">No residences yet — add one to start grouping boards.</p>
+        error ? null : (
+          <p className="text-xs text-gray-500">
+            No residence information yet. Add your first residence to organize your boards by site.
+          </p>
+        )
       ) : (
         <div className="space-y-3">
           {residences.map((entry) => {
@@ -721,7 +737,7 @@ function ResidencesSection() {
                 </div>
                 {confirmDeleteId === entry.id ? (
                   <div className="flex items-center gap-1 shrink-0">
-                    <span className="text-xs font-bold text-gray-400 hidden sm:inline">Deletes contacts &amp; unlinks devices —</span>
+                    <span className="text-xs font-bold text-gray-400 hidden sm:inline">This also deletes its contacts and unlinks its devices.</span>
                     <button onClick={() => removeResidence(entry)} disabled={!online} className="btn-ghost btn-sm text-(--red-indicator) disabled:opacity-40 disabled:cursor-not-allowed">DELETE</button>
                     <button onClick={() => setConfirmDeleteId(null)} className="btn-ghost btn-sm">CANCEL</button>
                   </div>

@@ -48,7 +48,7 @@ export default function LogConsole() {
   )
   const logs = cachedLogs ?? EMPTY_LOGS
   const loading = refreshing && logs.length === 0
-  const error = fetchError ? 'Could not load event history — check your connection and retry.' : null
+  const error = fetchError ? 'Could not load event history. Check your connection and try again.' : null
 
   const months = useMemo(
     () => groupByMonth(logs, selectedYear ? [selectedYear] : yearKeys),
@@ -133,7 +133,7 @@ export default function LogConsole() {
     <div className="relative">
       <div className="flex flex-col items-start mb-4 gap-1">
         <h1 className="font-bold text-2xl">Report Logs</h1>
-        <p className="text-sm text-gray-400">Logs event archive by month. choose a year, then select a month to view its logs.</p>
+        <p className="text-sm text-gray-400">The event archive is grouped by month. Choose a year, then select a month to view its events.</p>
         {loading && !showSkeleton && (
           <span className="inline-flex items-center gap-2 text-xs font-semibold text-amber-400">
             Loading live logs...

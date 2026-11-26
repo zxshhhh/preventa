@@ -49,7 +49,7 @@ function normalizeEvents(input: unknown): ApiEvent[] {
   const out: ApiEvent[] = []
   for (const raw of obj.results) {
     const level = raw.peak_tier >= 4 ? 'CRITICAL' : 'WARNING'
-    const title = `Fire alert — ${raw.peak_fire_type}`
+    const title = `Fire alert: ${raw.peak_fire_type}`
     const tierLabel = TIER_LABELS[raw.peak_tier] ?? `Tier ${raw.peak_tier}`
     const message = `${tierLabel} · ${raw.peak_fire_type} · device ${raw.device_id}${raw.duration_seconds ? ` · ${raw.duration_seconds}s` : ''}`
     const timestamp = new Date(raw.start_time).getTime()

@@ -193,7 +193,7 @@ async function request<T>(path: string, init: RequestInit, options: RequestOptio
       if (options.signal?.aborted) throw err
       throw new ApiError(`Request timed out after ${options.timeout ?? API_TIMEOUT_MS}ms`, 0)
     }
-    throw new ApiError('Network error — could not reach the API', 0)
+    throw new ApiError('Network error. Could not reach the API.', 0)
   } finally {
     clearTimeout(timer)
     options.signal?.removeEventListener('abort', onAbort)
@@ -255,7 +255,7 @@ export async function apiBlob(path: string, options: RequestOptions = {}): Promi
       if (err instanceof Error && err.name === 'AbortError') {
         throw new ApiError(`Request timed out after ${options.timeout ?? API_TIMEOUT_MS}ms`, 0)
       }
-      throw new ApiError('Network error — could not reach the API', 0)
+      throw new ApiError('Network error. Could not reach the API.', 0)
     } finally {
       clearTimeout(timer)
     }

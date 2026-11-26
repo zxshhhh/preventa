@@ -104,7 +104,7 @@ export function explainReading(reading: ReadingEntry) {
       title: tier === 0 ? 'Normal device state' : 'Trigger details unavailable',
       detail: tier === 0
         ? 'The device reported Tier 0 at this sample.'
-        : 'The saved reading has insufficient sensor-state evidence to explain this tier.',
+        : 'The saved reading has insufficient sensor state evidence to explain this tier.',
       group: 'fusion' as EvidenceGroup,
     }
   }

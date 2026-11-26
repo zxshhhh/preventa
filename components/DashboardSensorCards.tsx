@@ -93,6 +93,8 @@ interface Props {
   empty: boolean
   /** True while paged readings are still arriving for the selected window. */
   pending: boolean
+  /** True until the selected window's initial load has resolved (data or no data). */
+  loading?: boolean
 }
 
 export default function DashboardSensorCards({
@@ -103,12 +105,13 @@ export default function DashboardSensorCards({
   window,
   empty,
   pending,
+  loading = false,
 }: Props) {
   const online = useOnline()
   const { liveStatus, lastWsReadingAt } = useSensors()
-  // Only the very first response is a pending state; once a resolved window has
-  // no real readings the cards switch to their explicit "NO DATA" state.
-  const chartLoading = online && isApiConfigured() && chartSeries.length === 0
+  // The caller knows when the window has resolved: an empty LIVE buffer is a
+  // real "no data" result, not an endless loading state.
+  const chartLoading = online && isApiConfigured() && loading
   // Re-evaluate WS-delivered freshness on a tick so the dot flips to red when
   // the device stops sending (and triggers no re-render otherwise). `now` starts
   // at 0 and is only set client-side after mount to keep SSR/hydration stable.
@@ -131,7 +134,7 @@ export default function DashboardSensorCards({
     now - lastWsReadingAt <= LIVE_STALE_MS
   const liveConnecting = liveStatus === 'connecting' || liveStatus === 'reconnecting'
   const liveLabel = !online || liveStatus === 'offline'
-    ? 'Offline — live connection paused'
+    ? 'Offline. Live updates are paused.'
     : liveStatus === 'idle'
       ? 'Live connection unavailable'
       : liveStatus === 'connecting'
@@ -139,8 +142,8 @@ export default function DashboardSensorCards({
         : liveStatus === 'reconnecting'
           ? 'Reconnecting to live feed'
           : liveFeed
-            ? 'Live — receiving device readings'
-            : 'Live feed connected — waiting for device readings'
+            ? 'Live. Receiving device readings.'
+            : 'Live feed connected. Waiting for device readings.'
   const liveDotClass =
     !online || liveStatus === 'offline' || liveConnecting
       ? 'bg-(--amber-indicator)'
@@ -202,7 +205,7 @@ export default function DashboardSensorCards({
                 key={r}
                 onClick={() => onRangeChange(r)}
                 title={r === '1H' ? liveLabel : undefined}
-                aria-label={r === '1H' ? `LIVE — ${liveLabel}` : undefined}
+                aria-label={r === '1H' ? `LIVE, ${liveLabel}` : undefined}
                 className={'btn-segment ' + (range === r ? 'btn-segment-active' : 'text-gray-400 hover:text-gray-200')}
               >
                 {r === '1H' && (

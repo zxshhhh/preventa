@@ -1,33 +1,57 @@
 import type { SensorId, SensorSeries, TrendRange, SeriesPoint, RangeWindow } from '@/lib/dashboardData'
 import { RANGE_MS, bucketWindow, formatRangeLabel } from '@/lib/dashboardData'
 import { apiGet } from './client'
-import { CACHE_TAGS, CACHE_TTL, cachedFetch, emitCacheProgress } from './cache'
+import { CACHE_TAGS, CACHE_TTL, cachedFetch, emitCacheProgress, peekCache } from './cache'
 import { ENDPOINTS } from './endpoints'
 
 const SENSOR_IDS: SensorId[] = ['mq7', 'dht22', 'acs712', 'humidity']
 
 const MAX_PAGES = 40
-const PAGE_BATCH = 6
-const MAX_PROBE_REQUESTS = 5
-const ANCHOR_MS = 24 * 60 * 60 * 1000
 const REQUEST_BUDGET = 48
 /** Coalesce fast page batches — every emission re-renders the whole dashboard. */
 const PROGRESS_EMIT_MS = 100
 
+const HOUR_MS = 60 * 60 * 1000
+const DEFAULT_PAGE_SIZE = 1000
+const RANGE_TIMEOUT_MS = 30_000
+const RANGE_CONCURRENCY = 3
+
+/** A single newly completed day at ~2 s/readings fits in ~43 pages of 1000. */
+const DAY_FETCH_MAX_PAGES = 60
+const DAY_FETCH_BUDGET = 80
+/** If the app was closed longer, a bounded catch-up or full rebuild is safer. */
+const MAX_CATCHUP_DAYS = 3
+
+export type HistoryRange = '7D' | '30D'
+
+const RANGE_DAYS: Record<HistoryRange, number> = { '7D': 7, '30D': 30 }
+
+export function isHistoryRange(range: TrendRange): range is HistoryRange {
+  return range === '7D' || range === '30D'
+}
+
 export interface RangeSnapshot {
   range: TrendRange
   window: RangeWindow
-  /** Raw timed points within the fixed window (not carry-filled). */
+  /** Raw (or hourly-compacted) timed points within the fixed window. */
   series: SensorSeries[]
   /** True when fetch completed within caps/budget without known coverage holes. */
   complete: boolean
   /** True for an in-flight snapshot built from only the pages fetched so far. */
   partial: boolean
+  /** Local midnight the complete-day history is covered through. */
+  coverageEnd?: number
+  /** Number of fully fetched days in the window (0 for a sampled bootstrap). */
+  exactDays?: number
 }
 
 interface FetchWindowOptions {
   signal?: AbortSignal
-  budget?: { used: number }
+  budget?: { used: number; limit?: number }
+  timeout?: number
+  pageSize?: number
+  concurrency?: number
+  maxPages?: number
   /** Freshly fetched readings only (first page, then each batch's delta). */
   onItems?: (items: ReadingItem[]) => void
 }
@@ -35,6 +59,8 @@ interface FetchWindowOptions {
 export interface FetchRangeOptions extends FetchWindowOptions {
   /** Partial snapshot for progressive rendering; never cached or persisted. */
   onProgress?: (snapshot: RangeSnapshot) => void
+  /** Bypass the saved snapshot and rebuild the whole window. */
+  fresh?: boolean
 }
 
 interface ReadingItem {
@@ -54,6 +80,26 @@ interface PaginatedReadings {
   results: ReadingItem[]
 }
 
+function emptySeries(): SensorSeries[] {
+  return SENSOR_IDS.map((id) => ({ id, points: [] as SeriesPoint[] }))
+}
+
+function startOfLocalDay(ts: number): number {
+  const d = new Date(ts)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+}
+
+function addLocalDays(ts: number, days: number): number {
+  const d = new Date(ts)
+  d.setDate(d.getDate() + days)
+  return d.getTime()
+}
+
+/** Last N complete local calendar days: [midnight N days ago, midnight today). */
+function historyWindow(range: HistoryRange, boundary: number): RangeWindow {
+  return { start: addLocalDays(boundary, -RANGE_DAYS[range]), end: boundary }
+}
+
 function readingsOf(r: ReadingItem): Array<[SensorId, number]> {
   return [
     ['mq7', r.smooth_ppm],
@@ -63,13 +109,18 @@ function readingsOf(r: ReadingItem): Array<[SensorId, number]> {
   ]
 }
 
-function normalizeReadings(results: ReadingItem[], range: TrendRange, window?: RangeWindow): SensorSeries[] {
+function normalizeReadings(
+  results: ReadingItem[],
+  range: TrendRange,
+  window?: RangeWindow,
+  exclusiveEnd = false,
+): SensorSeries[] {
   const buckets: Record<SensorId, SeriesPoint[]> = { mq7: [], dht22: [], acs712: [], humidity: [] }
 
   for (const r of results) {
     const t = new Date(r.timestamp).getTime()
     if (!Number.isFinite(t)) continue
-    if (window && (t < window.start || t > window.end)) continue
+    if (window && (t < window.start || (exclusiveEnd ? t >= window.end : t > window.end))) continue
     for (const [id, value] of readingsOf(r)) {
       if (typeof value !== 'number' || !Number.isFinite(value)) continue
       buckets[id].push({ t, value, label: formatRangeLabel(t, range) })
@@ -110,6 +161,56 @@ function appendReadings(
   })
 }
 
+/** Compact timed readings into hourly averages so 30 days stay small enough to persist. */
+function toHourlyPoints(points: SeriesPoint[], range: TrendRange, window: RangeWindow): SeriesPoint[] {
+  const groups = new Map<number, { sum: number; count: number }>()
+  for (const p of points) {
+    if (typeof p.t !== 'number' || !Number.isFinite(p.t)) continue
+    if (typeof p.value !== 'number' || !Number.isFinite(p.value)) continue
+    if (p.t < window.start || p.t >= window.end) continue
+    const hour = Math.floor(p.t / HOUR_MS) * HOUR_MS
+    const group = groups.get(hour) ?? { sum: 0, count: 0 }
+    group.sum += p.value
+    group.count += 1
+    groups.set(hour, group)
+  }
+  return [...groups.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([t, group]) => ({ t, value: group.sum / group.count, label: formatRangeLabel(t, range) }))
+}
+
+/** Hourly buckets are keyed by timestamp: a re-fetched day replaces, never duplicates. */
+function mergeHourlyPoints(a: SeriesPoint[], b: SeriesPoint[]): SeriesPoint[] {
+  if (!a.length) return b
+  if (!b.length) return a
+  const merged = new Map<number, SeriesPoint>()
+  for (const p of a) if (typeof p.t === 'number') merged.set(p.t, p)
+  for (const p of b) if (typeof p.t === 'number') merged.set(p.t, p)
+  return [...merged.values()].sort((x, y) => (x.t ?? 0) - (y.t ?? 0))
+}
+
+function appendHourlySeries(
+  series: SensorSeries[],
+  items: ReadingItem[],
+  range: TrendRange,
+  window: RangeWindow,
+): SensorSeries[] {
+  if (!items.length) return series
+  const normalized = normalizeReadings(items, range, window, true)
+  const hourly = normalized.map((s) => ({ id: s.id, points: toHourlyPoints(s.points, range, window) }))
+  return series.map((s) => {
+    const add = hourly.find((x) => x.id === s.id)?.points ?? []
+    return add.length ? { id: s.id, points: mergeHourlyPoints(s.points, add) } : s
+  })
+}
+
+function trimSeries(series: SensorSeries[], window: RangeWindow): SensorSeries[] {
+  return series.map((s) => ({
+    id: s.id,
+    points: s.points.filter((p) => typeof p.t === 'number' && p.t >= window.start && p.t < window.end),
+  }))
+}
+
 function withPage(params: URLSearchParams, page: number): string {
   const next = new URLSearchParams(params)
   next.set('page', String(page))
@@ -131,17 +232,18 @@ function notifyItems(options: FetchWindowOptions, items: ReadingItem[]) {
 
 async function getReadings(path: string, options: FetchWindowOptions): Promise<PaginatedReadings | null> {
   const budget = options.budget
-  if (budget && budget.used >= REQUEST_BUDGET) return null
+  if (budget && budget.used >= (budget.limit ?? REQUEST_BUDGET)) return null
   if (budget) budget.used += 1
   throwIfAborted(options.signal)
-  return apiGet<PaginatedReadings>(path, { signal: options.signal })
+  return apiGet<PaginatedReadings>(path, { signal: options.signal, timeout: options.timeout })
 }
 
-function pageNumbers(totalPages: number): number[] {
-  if (totalPages <= MAX_PAGES) return Array.from({ length: totalPages }, (_, i) => i + 1)
+function pageNumbers(totalPages: number, maxPages: number): number[] {
+  if (maxPages < 1) return []
+  if (totalPages <= maxPages) return Array.from({ length: totalPages }, (_, i) => i + 1)
   const pages = new Set<number>()
-  for (let i = 0; i < MAX_PAGES; i++) {
-    pages.add(1 + Math.round((i * (totalPages - 1 )) / (MAX_PAGES - 1)))
+  for (let i = 0; i < maxPages; i++) {
+    pages.add(1 + Math.round((i * (totalPages - 1)) / (maxPages - 1)))
   }
   return [...pages].sort((a, b) => a - b)
 }
@@ -154,6 +256,7 @@ async function fetchReadingsWindow(
   const params = new URLSearchParams({
     start: new Date(startMs).toISOString(),
     end: new Date(endMs).toISOString(),
+    page_size: String(options.pageSize ?? DEFAULT_PAGE_SIZE),
   })
 
   const first = await getReadings(`${ENDPOINTS.readings}?${params.toString()}`, options)
@@ -163,14 +266,16 @@ async function fetchReadingsWindow(
 
   const pageSize = firstResults.length
   const totalPages = Math.max(1, Math.ceil((first.count ?? pageSize) / pageSize))
-  const pages = pageNumbers(totalPages).filter((p) => p !== 1)
+  const maxPages = options.maxPages ?? MAX_PAGES
+  const pages = pageNumbers(totalPages, maxPages).filter((p) => p !== 1)
 
   // The first page is enough to render: publish it before waiting for the rest.
   notifyItems(options, firstResults)
 
-  let complete = totalPages <= MAX_PAGES
-  for (let i = 0; i < pages.length; i += PAGE_BATCH) {
-    const batch = pages.slice(i, i + PAGE_BATCH)
+  const concurrency = Math.max(1, options.concurrency ?? RANGE_CONCURRENCY)
+  let complete = totalPages <= maxPages
+  for (let i = 0; i < pages.length; i += concurrency) {
+    const batch = pages.slice(i, i + concurrency)
     const results = await Promise.all(
       batch.map(async (page) => {
         try {
@@ -190,7 +295,7 @@ async function fetchReadingsWindow(
     const fresh: ReadingItem[] = []
     for (const items of results) fresh.push(...items)
     notifyItems(options, fresh)
-    if (options.budget && options.budget.used >= REQUEST_BUDGET) {
+    if (options.budget && options.budget.used >= (options.budget.limit ?? REQUEST_BUDGET)) {
       complete = false
       break
     }
@@ -199,107 +304,127 @@ async function fetchReadingsWindow(
   return { complete }
 }
 
-async function probeHasData(startMs: number, endMs: number, options: FetchWindowOptions): Promise<boolean | null> {
-  const params = new URLSearchParams({
-    start: new Date(startMs).toISOString(),
-    end: new Date(endMs).toISOString(),
-  })
-  try {
-    const data = await getReadings(`${ENDPOINTS.readings}?${params.toString()}`, options)
-    if (!data) return null
-    return (data.results?.length ?? 0) > 0 || (data.count ?? 0) > 0
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') throw err
-    return null
-  }
-}
-
-async function findNearestDataStart(window: RangeWindow, options: FetchWindowOptions): Promise<number | null> {
-  // Bounded nearest probe inside the fixed window: find earliest available data
-  // near window.start with a hard request cap to avoid storms.
-  let probes = 0
-  let lo = window.start
-  let hi = window.end
-  let found: number | null = null
-
-  while (probes < MAX_PROBE_REQUESTS && lo < hi) {
-    const mid = Math.floor((lo + hi) / 2)
-    const has = await probeHasData(lo, mid, options)
-    probes += 1
-    if (has === true) {
-      found = mid
-      hi = mid
-      if (mid - lo <= 6 * 60 * 60 * 1000) break
-    } else if (has === false) {
-      lo = mid + 1
-    } else {
-      break
-    }
-  }
-
-  if (found == null) {
-    // Coarse fallback: scan forward in day slices, bounded by remaining probe budget.
-    for (let t = window.start; t < window.end && probes < MAX_PROBE_REQUESTS; t += ANCHOR_MS) {
-      const end = Math.min(window.end, t + ANCHOR_MS)
-      const has = await probeHasData(t, end, options)
-      probes += 1
-      if (has === true) return t
-      if (has === null) return null
-    }
-    return null
-  }
-
-  return Math.max(window.start, lo)
-}
-
-async function fetchRangeSnapshot(range: TrendRange, options: FetchRangeOptions = {}): Promise<RangeSnapshot> {
-  const end = Date.now()
-  const start = end - RANGE_MS[range]
-  const window: RangeWindow = { start, end }
-  const budget = options.budget ?? { used: 0 }
-  let series = SENSOR_IDS.map((id) => ({ id, points: [] as SeriesPoint[] }))
+function makeProgress(range: TrendRange, window: RangeWindow, options: FetchRangeOptions) {
   let lastEmit = 0
-  const publishProgress = () => {
+  return (series: SensorSeries[]) => {
     if (!options.onProgress) return
     const at = Date.now()
     if (at - lastEmit < PROGRESS_EMIT_MS) return
     lastEmit = at
     options.onProgress({ range, window, series, complete: false, partial: true })
   }
+}
+
+function defaultFetchOptions(options: FetchRangeOptions, limit = REQUEST_BUDGET, maxPages = MAX_PAGES): FetchWindowOptions {
+  return {
+    signal: options.signal,
+    budget: { used: options.budget?.used ?? 0, limit: options.budget?.limit ?? limit },
+    pageSize: options.pageSize ?? DEFAULT_PAGE_SIZE,
+    concurrency: options.concurrency ?? RANGE_CONCURRENCY,
+    timeout: options.timeout ?? RANGE_TIMEOUT_MS,
+    maxPages: options.maxPages ?? maxPages,
+  }
+}
+
+/** 1H/24H keep the original sliding fixed-duration window. */
+async function fetchTimeWindowSnapshot(range: TrendRange, options: FetchRangeOptions): Promise<RangeSnapshot> {
+  const end = Date.now()
+  const start = end - RANGE_MS[range]
+  const window: RangeWindow = { start, end }
+  const publish = makeProgress(range, window, options)
+  let series = emptySeries()
+
   const opts: FetchWindowOptions = {
-    ...options,
-    budget,
+    ...defaultFetchOptions(options),
     onItems: (items) => {
       series = appendReadings(series, items, range, window)
-      publishProgress()
+      publish(series)
     },
   }
 
-  let fetchStart = start
-  let complete = true
+  const { complete } = await fetchReadingsWindow(start, end, opts)
+  return { range, window, series, complete, partial: false }
+}
 
-  if (range === '30D') {
-    const anchorEnd = Math.min(end, start + ANCHOR_MS)
-    const anchorHasData = await probeHasData(start, anchorEnd, opts)
-    if (anchorHasData === false) {
-      const nearest = await findNearestDataStart(window, opts)
-      if (nearest == null) {
-        return { range, window, series: SENSOR_IDS.map((id) => ({ id, points: [] })), complete: false, partial: false }
-      }
-      fetchStart = nearest
-      complete = nearest <= start
-    } else if (anchorHasData == null) {
-      complete = false
-    }
+/**
+ * First load of a history range. Pages are sampled across the whole window so
+ * the backend sees a bounded number of requests; each midnight rollover then
+ * replaces one sampled day with a fully fetched one.
+ */
+async function bootstrapHistory(range: HistoryRange, boundary: number, options: FetchRangeOptions): Promise<RangeSnapshot> {
+  const window = historyWindow(range, boundary)
+  const publish = makeProgress(range, window, options)
+  let series = emptySeries()
+
+  const opts: FetchWindowOptions = {
+    ...defaultFetchOptions(options),
+    onItems: (items) => {
+      series = appendHourlySeries(series, items, range, window)
+      publish(series)
+    },
   }
 
-  const { complete: fetchComplete } = await fetchReadingsWindow(fetchStart, end, opts)
+  const { complete } = await fetchReadingsWindow(window.start, window.end, opts)
   return {
     range,
     window,
-    series,
-    complete: complete && fetchComplete,
+    series: trimSeries(series, window),
+    complete,
     partial: false,
+    coverageEnd: boundary,
+    exactDays: 0,
+  }
+}
+
+/** Fetch only the newly completed day(s) and drop the oldest day(s) from the window. */
+async function rollForward(
+  range: HistoryRange,
+  saved: RangeSnapshot,
+  boundary: number,
+  options: FetchRangeOptions,
+): Promise<RangeSnapshot> {
+  const window = historyWindow(range, boundary)
+  const publish = makeProgress(range, window, options)
+  let series = trimSeries(Array.isArray(saved.series) ? saved.series : emptySeries(), window)
+  publish(series)
+
+  if (typeof saved.coverageEnd !== 'number' || !Number.isFinite(saved.coverageEnd)) {
+    return bootstrapHistory(range, boundary, options)
+  }
+
+  const fetchStart = Math.max(saved.coverageEnd, window.start)
+  const shared = defaultFetchOptions(options)
+  let cursor = fetchStart
+  let fetchedDays = 0
+  let allComplete = true
+
+  while (cursor < boundary) {
+    if (fetchedDays >= MAX_CATCHUP_DAYS) return bootstrapHistory(range, boundary, options)
+    const dayEnd = addLocalDays(cursor, 1)
+    const dayOpts: FetchWindowOptions = {
+      ...shared,
+      budget: { used: 0, limit: DAY_FETCH_BUDGET },
+      maxPages: DAY_FETCH_MAX_PAGES,
+      onItems: (items) => {
+        series = appendHourlySeries(series, items, range, window)
+        publish(series)
+      },
+    }
+    const { complete } = await fetchReadingsWindow(cursor, dayEnd, dayOpts)
+    allComplete = allComplete && complete
+    cursor = dayEnd
+    fetchedDays += 1
+  }
+
+  const exactDays = Math.min(RANGE_DAYS[range], (saved.exactDays ?? 0) + fetchedDays)
+  return {
+    range,
+    window,
+    series: trimSeries(series, window),
+    complete: allComplete && exactDays >= RANGE_DAYS[range],
+    partial: false,
+    coverageEnd: boundary,
+    exactDays,
   }
 }
 
@@ -313,16 +438,18 @@ function isRangeSnapshot(value: unknown): value is RangeSnapshot {
 }
 
 function emptySnapshot(range: TrendRange, window: RangeWindow): RangeSnapshot {
-  return { range, window, series: SENSOR_IDS.map((id) => ({ id, points: [] })), complete: false, partial: false }
+  return { range, window, series: emptySeries(), complete: false, partial: false }
 }
 
 /**
- * Fixed-window range snapshot. Returns raw timed points within a fixed window;
+ * Fixed-window range snapshot. Returns timed points within a fixed window;
  * callers bucket with bucketWindow(..., snapshot.window) so gaps are explicit.
  */
 function normalizeSnapshot(value: unknown, range: TrendRange): RangeSnapshot {
   const end = Date.now()
-  const fallbackWindow: RangeWindow = { start: end - RANGE_MS[range], end }
+  const fallbackWindow: RangeWindow = isHistoryRange(range)
+    ? historyWindow(range, startOfLocalDay(end))
+    : { start: end - RANGE_MS[range], end }
   if (isRangeSnapshot(value)) {
     const v = value as RangeSnapshot
     const w =
@@ -330,7 +457,15 @@ function normalizeSnapshot(value: unknown, range: TrendRange): RangeSnapshot {
         ? v.window
         : fallbackWindow
     const series = Array.isArray(v.series) ? v.series : []
-    return { range, window: w, series: series as SensorSeries[], complete: Boolean(v.complete), partial: false }
+    return {
+      range,
+      window: w,
+      series: series as SensorSeries[],
+      complete: Boolean(v.complete),
+      partial: false,
+      coverageEnd: typeof v.coverageEnd === 'number' && Number.isFinite(v.coverageEnd) ? v.coverageEnd : undefined,
+      exactDays: typeof v.exactDays === 'number' && Number.isFinite(v.exactDays) ? v.exactDays : undefined,
+    }
   }
   // Legacy persisted shape: SensorSeries[]
   if (Array.isArray(value)) {
@@ -339,36 +474,70 @@ function normalizeSnapshot(value: unknown, range: TrendRange): RangeSnapshot {
   return emptySnapshot(range, fallbackWindow)
 }
 
+/** Persisted form: hourly averages for history, chart buckets for live ranges. */
+function compactSnapshot(snapshot: unknown, range: TrendRange): RangeSnapshot {
+  const s = normalizeSnapshot(snapshot, range)
+  return {
+    ...s,
+    series: s.series.map((series) => ({
+      id: series.id,
+      points: isHistoryRange(range)
+        ? toHourlyPoints(series.points, range, s.window)
+        : bucketWindow(series.points, range, s.window),
+    })),
+  }
+}
+
 export function fetchRangeRaw(range: TrendRange, options: FetchRangeOptions = {}): Promise<RangeSnapshot> {
   const key = `range:${range}`
+
+  // The 60 s poll is a no-op until local midnight has actually passed.
+  if (isHistoryRange(range) && !options.fresh) {
+    throwIfAborted(options.signal)
+    const saved = peekCache<RangeSnapshot>(key)
+    if (saved && saved.coverageEnd === startOfLocalDay(Date.now())) {
+      // Same object reference keeps the 60 s poll from re-rendering the dashboard.
+      return Promise.resolve(saved)
+    }
+  }
+
   return cachedFetch(
     key,
     async () => {
-      try {
-        return await fetchRangeSnapshot(range, {
-          ...options,
-          onProgress: (snapshot) => {
-            // Progress is display-only: subscribers see it, the cache does not.
-            emitCacheProgress(key, snapshot)
-            options.onProgress?.(snapshot)
-          },
-        })
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') throw err
-        throw err
+      const wrapped: FetchRangeOptions = {
+        ...options,
+        onProgress: (snapshot) => {
+          // Progress is display-only: subscribers see it, the cache does not.
+          emitCacheProgress(key, snapshot)
+          options.onProgress?.(snapshot)
+        },
       }
+
+      if (isHistoryRange(range)) {
+        const boundary = startOfLocalDay(Date.now())
+        const saved = peekCache<RangeSnapshot>(key)
+        if (
+          !options.fresh &&
+          saved &&
+          typeof saved.coverageEnd === 'number' &&
+          Number.isFinite(saved.coverageEnd) &&
+          saved.coverageEnd < boundary
+        ) {
+          return rollForward(range, saved, boundary, wrapped)
+        }
+        return bootstrapHistory(range, boundary, wrapped)
+      }
+
+      return fetchTimeWindowSnapshot(range, wrapped)
     },
     {
       ...CACHE_TTL.ranges,
       persist: true,
       tags: [CACHE_TAGS.ranges],
-      storageTransform: (snapshot) => {
-        const s = normalizeSnapshot(snapshot, range)
-        return {
-          ...s,
-          series: s.series.map((series) => ({ id: series.id, points: bucketWindow(series.points, range, s.window) })),
-        }
-      },
+      // History handles its own schedule (no-op until midnight); never let the
+      // generic TTL turn a poll into a full rebuild.
+      fresh: isHistoryRange(range) || options.fresh === true,
+      storageTransform: (snapshot) => compactSnapshot(snapshot, range),
     },
   ).then((value) => normalizeSnapshot(value, range))
 }

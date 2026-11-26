@@ -282,7 +282,7 @@ export function cachedFetch<T>(key: string, fetcher: (signal?: AbortSignal) => P
 
   // Offline: the saved snapshot is the truth for this session, however old.
   if (entry && isOffline()) return Promise.resolve(entry.value as T)
-  if (!entry && isOffline()) return Promise.reject(new Error('Offline — no saved data available'))
+  if (!entry && isOffline()) return Promise.reject(new Error('Offline. No saved data available.'))
 
   if (entry && !options.fresh && age < entry.ttlMs) return Promise.resolve(entry.value as T)
 

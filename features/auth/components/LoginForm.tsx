@@ -1,9 +1,11 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/context/useAuth'
 import { ApiError } from '@/lib/api/client'
+import { consumePendingSignupUsername } from '@/lib/api/auth'
 
 /** Only allow same-origin absolute paths — never //host, /\host, or /login itself. */
 function safeNextPath(value: string | null): string | null {
@@ -21,11 +23,22 @@ export default function LoginForm() {
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [rememberMe, setRememberMe] = useState(false)
+  const [registered, setRegistered] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
     const t = window.setTimeout(() => {
+      const params = new URLSearchParams(window.location.search)
+      const justRegistered = params.get('registered') === '1'
+      if (justRegistered) {
+        setRegistered(true)
+        const pending = consumePendingSignupUsername()
+        if (pending) {
+          setUsername(pending)
+          return
+        }
+      }
       const remembered = localStorage.getItem('rememberedEmail')
       if (remembered) {
         setUsername(remembered)
@@ -60,7 +73,12 @@ export default function LoginForm() {
       await authLogin(username, password)
       remember()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Login failed. Please try again.')
+      const credentialsRejected = err instanceof ApiError && (err.status === 400 || err.status === 401)
+      setError(
+        credentialsRejected
+          ? 'Wrong username or password. Please try again.'
+          : 'We could not sign you in right now. Please check your connection and try again.',
+      )
     } finally {
       setSubmitting(false)
     }
@@ -68,6 +86,11 @@ export default function LoginForm() {
 
   return (
     <form onSubmit={login} className="flex flex-col gap-4 sm:gap-5">
+      {registered && (
+        <p role="status" className="text-xs font-semibold text-(--green-indicator) bg-green-500/10 border border-green-500/30 rounded-lg px-3 py-2">
+          Account created. Sign in with your new credentials.
+        </p>
+      )}
       <div>
         <h2 className="text-xl sm:text-2xl font-bold text-gray-100">Sign in to your account</h2>
         <p className="text-sm text-gray-400 mt-0.5">Enter your credentials below.</p>
@@ -150,7 +173,7 @@ export default function LoginForm() {
         disabled={submitting}
         className="btn-primary btn-lg w-full disabled:opacity-60 disabled:cursor-wait"
       >
-        {submitting ? 'SIGNING IN...' : 'LOGIN TO PREVENTA'}
+        {submitting ? 'SIGNING IN...' : 'SIGN IN TO PREVENTA'}
         <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M5 12H19M13 6L19 12L13 18" />
         </svg>
@@ -160,6 +183,13 @@ export default function LoginForm() {
           {error}
         </p>
       )}
+
+      <p className="text-center text-sm text-gray-400">
+        Don&apos;t have an account?{' '}
+        <Link href="/signup" className="font-semibold text-(--secondary-color) hover:underline">
+          Sign up
+        </Link>
+      </p>
     </form>
   )
 }

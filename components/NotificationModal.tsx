@@ -73,7 +73,7 @@ export default function NotificationModal({ show, onClose }: Props) {
         id,
         level: status.level,
         title: cfg.name,
-        detail: `${formatNumber(point.value, cfg.decimals)} ${cfg.unit} — ${status.label}`,
+        detail: `${formatNumber(point.value, cfg.decimals)} ${cfg.unit}, ${status.label}`,
       },
     ]
   })

@@ -207,7 +207,7 @@ export async function enableBrowserPush(): Promise<PushEnableResult> {
     return {
       ok: false,
       reason: 'error',
-      message: 'Push is not configured yet — the backend teammate still needs to send the Firebase Web config and VAPID key.',
+      message: 'Push notifications are not ready yet. The backend team still needs to send the Firebase web config and VAPID key.',
     }
   }
 
@@ -248,7 +248,7 @@ export async function enableBrowserPush(): Promise<PushEnableResult> {
     const messaging = fb.getMessaging(app)
     const token = await fb.getToken(messaging, { vapidKey, serviceWorkerRegistration: registration })
     if (!token) {
-      return { ok: false, reason: 'error', message: 'Could not register this browser for push — no token was returned.' }
+      return { ok: false, reason: 'error', message: 'Could not register this browser for push. No token was returned.' }
     }
 
     try {
@@ -267,7 +267,7 @@ export async function enableBrowserPush(): Promise<PushEnableResult> {
     setStoredPushToken(token)
     return { ok: true, token }
   } catch {
-    return { ok: false, reason: 'error', message: 'Enabling browser notifications failed — please try again.' }
+    return { ok: false, reason: 'error', message: 'Enabling browser notifications failed. Please try again.' }
   }
 }
 
@@ -289,7 +289,7 @@ export async function disableBrowserPush(accessTokenOverride?: string | null): P
         accessTokenOverride ? { headers: { Authorization: `Bearer ${accessTokenOverride}` } } : {},
       )
     } catch {
-      return { ok: false, message: 'Unsubscribe failed on the server — your changes were not saved. Please retry.' }
+      return { ok: false, message: 'Unsubscribe failed on the server. Your changes were not saved. Please try again.' }
     }
   }
 

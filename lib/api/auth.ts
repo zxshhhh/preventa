@@ -14,12 +14,20 @@ export interface AuthUser {
   username: string
 }
 
+export interface SignupUser {
+  id: number
+  username: string
+  email: string
+}
+
 interface LoginResponse {
   access: string
   refresh: string
 }
 
 export const USERNAME_KEY = 'preventa.username'
+/** One-time handoff from a successful signup to the sign-in form (session-only). */
+export const PENDING_SIGNUP_USERNAME_KEY = 'preventa.signup.username'
 
 function readStorage(key: string): string | null {
   if (typeof window === 'undefined') return null
@@ -38,6 +46,30 @@ export function setUsername(username: string | null): void {
   } catch {
     /* ignore storage failures */
   }
+}
+
+/** Remember the new username for one sign-in attempt after a successful signup. */
+export function setPendingSignupUsername(username: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (username.trim()) sessionStorage.setItem(PENDING_SIGNUP_USERNAME_KEY, username.trim())
+    else sessionStorage.removeItem(PENDING_SIGNUP_USERNAME_KEY)
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
+/** Read and clear the pending signup username (never persisted across sessions). */
+export function consumePendingSignupUsername(): string | null {
+  if (typeof window === 'undefined') return null
+  let value: string | null = null
+  try {
+    value = sessionStorage.getItem(PENDING_SIGNUP_USERNAME_KEY)
+    sessionStorage.removeItem(PENDING_SIGNUP_USERNAME_KEY)
+  } catch {
+    /* ignore storage failures */
+  }
+  return value?.trim() || null
 }
 
 /** Best-effort username claim from the access token — sessions created before the username was stored. */
@@ -79,11 +111,24 @@ export function initialFor(username: string | null | undefined): string {
   return (Array.from(trimmed)[0] ?? 'U').toUpperCase()
 }
 
+/** Register a new account. The signup endpoint returns the user, not a token pair. */
+export async function signup(username: string, email: string, password: string): Promise<SignupUser> {
+  const data = await apiPost<SignupUser>(
+    ENDPOINTS.signup,
+    { username: username.trim(), email: email.trim(), password },
+    { authenticated: false },
+  )
+  if (!data || typeof data.username !== 'string' || typeof data.email !== 'string') {
+    throw new Error('Signup failed. The server returned an unexpected response.')
+  }
+  return data
+}
+
 export async function login(username: string, password: string): Promise<AuthUser> {
   const trimmed = username.trim()
   const data = await apiPost<LoginResponse>(ENDPOINTS.login, { username: trimmed, password }, { authenticated: false })
   if (!data?.access || !data?.refresh) {
-    throw new Error('Login failed — the server returned no token pair')
+    throw new Error('Login failed. The server returned no token pair.')
   }
   setToken(data.access)
   setRefreshToken(data.refresh)

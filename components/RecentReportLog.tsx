@@ -70,7 +70,7 @@ function readingDisplayValue(values: Record<string, unknown>, keys: readonly str
       return formatNumber(Number(value), 1)
     }
   }
-  return '—'
+  return 'Unavailable'
 }
 
 function ReportCard({ log, reading }: { log: LogEntry; reading: ReportReading | undefined }) {
@@ -82,10 +82,10 @@ function ReportCard({ log, reading }: { log: LogEntry; reading: ReportReading | 
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
         <div className="min-w-0">
           <p className="text-sm font-bold text-gray-100 tnum">
-            {hydrated ? formatTime(log.timestamp) : '—'}
+            {hydrated ? formatTime(log.timestamp) : 'Loading…'}
           </p>
           <p className="text-xs text-gray-400 mt-0.5">
-            {hydrated ? formatDate(log.timestamp) : <span className="text-gray-500">—</span>}
+            {hydrated ? formatDate(log.timestamp) : <span className="text-gray-500">Loading…</span>}
           </p>
         </div>
         <span className={'shrink-0 text-xs font-bold px-2.5 py-1 rounded-full whitespace-nowrap ' + statusClass(log.status)}>
@@ -95,7 +95,7 @@ function ReportCard({ log, reading }: { log: LogEntry; reading: ReportReading | 
 
       <div className="grid grid-cols-3 gap-2">
         {READING_FIELDS.map((field) => {
-          let value = '—'
+          let value = 'Unavailable'
           if (r.state === 'ready' && r.reading) {
             value = readingDisplayValue(r.reading.values, field.keys)
           }

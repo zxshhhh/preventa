@@ -291,13 +291,13 @@ export default function SettingsContent() {
 
         pushToast(
           'Device settings saved',
-          'Sent to the device — waiting for it to sync.',
+          'Sent to the device. Waiting for it to sync.',
         )
       })
       .catch(() =>
         pushToast(
           'Save failed',
-          'Could not reach the API — device settings kept.',
+          'Could not reach the API. Your device settings were kept.',
         ),
       )
   }
@@ -353,7 +353,7 @@ function AppearanceSection() {
   const detail = !hydrated
     ? 'Following your device setting.'
     : theme === 'system'
-      ? `Following your device — currently ${resolvedTheme}.`
+      ? `Following your device, currently ${resolvedTheme}.`
       : `Using the ${theme} theme on this device.`
 
   return (
@@ -402,7 +402,7 @@ function AccessibilitySection() {
           <p className="text-xs font-bold text-gray-100">Reduce motion</p>
           <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
             Stops the pulse, ping and shimmer animations. System respects your
-            device&apos;s reduced-motion setting.
+            device&apos;s reduced motion setting.
           </p>
           <SegmentedField
             legend="Reduce motion"
@@ -449,7 +449,7 @@ function AccessibilitySection() {
               Enhanced focus outlines
             </p>
             <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
-              Adds thicker, high-contrast keyboard focus rings across the app.
+              Adds thicker keyboard focus rings with stronger contrast across the app.
             </p>
           </div>
 
@@ -663,9 +663,9 @@ function DeviceReportingSection({
 
             {valid ? (
               <p id="reporting-interval-help" className="text-xs text-gray-500 leading-relaxed">
-                2–60 whole seconds. Controls routine cloud uploads only — local
-                acquisition stays on its nominal two-second schedule. Leave
-                empty to restore the firmware default.
+                2 to 60 whole seconds. This controls routine cloud uploads only.
+                Local sampling stays on its normal two second schedule. Leave
+                this empty to use the firmware default.
               </p>
             ) : (
               <p id="reporting-interval-help" role="alert" className="text-xs font-bold text-red-400">
@@ -740,7 +740,7 @@ function DeviceReportingSection({
 
         {offline ? (
           <span className="text-xs font-semibold text-(--amber-indicator)">
-            Offline — settings are read-only
+            Offline. Settings cannot be changed until you reconnect.
           </span>
         ) : dirty ? (
           <span className="text-xs font-semibold text-amber-400">
@@ -866,7 +866,7 @@ function DeviceManagementSection() {
       if (created?.apiKey) {
         pushToast(
           'Device registered',
-          `${landed.name} was added. Copy the setup key now — it is shown once.`,
+          `${landed.name} was added. Copy the setup key now. It is shown only once.`,
         )
       } else if (failure) {
         pushToast(
@@ -876,7 +876,7 @@ function DeviceManagementSection() {
         )
         setRegisterNotice({
           level: 'info',
-          text: `${landed.hardwareId} was already registered to this account — nothing was changed. The one-time setup key is not available again.`,
+          text: `${landed.hardwareId} was already registered to this account. Nothing was changed. The setup key cannot be shown again.`,
         })
       } else {
         pushToast(
@@ -933,7 +933,7 @@ function DeviceManagementSection() {
       .catch(() =>
         pushToast(
           'Delete failed',
-          'Could not reach the API — device kept.',
+          'Could not reach the API. The device was kept.',
           'CRITICAL',
         ),
       )
@@ -1068,7 +1068,7 @@ function DeviceManagementSection() {
       {registered?.apiKey && (
         <div className="mt-4 rounded-xl border border-amber-400/25 bg-amber-400/10 p-3">
           <p className="text-xs font-extrabold tracking-wide text-amber-300">
-            SETUP KEY — SHOWN ONCE
+            SETUP KEY: SHOWN ONCE
           </p>
 
           <p className="text-xs text-gray-300 mt-1 leading-relaxed">
@@ -1162,7 +1162,7 @@ function DeviceManagementSection() {
               {confirmDeleteId === d.id ? (
                 <div className="flex items-center gap-1 shrink-0">
                   <span className="text-xs font-bold text-gray-400 hidden sm:inline">
-                    Deletes all readings —
+                    Deletes all readings.
                   </span>
 
                   <button
@@ -1261,7 +1261,7 @@ function BrowserNotificationsSection() {
     void disableBrowserPush().then((result) => {
       setBusyState(null)
       if (result.ok) setNotice('Browser notifications are turned off for this device.')
-      else setNotice(result.message ?? 'Unsubscribe failed — please retry.')
+      else setNotice(result.message ?? 'Unsubscribe failed. Please try again.')
     })
   }
 
@@ -1332,9 +1332,9 @@ function BrowserNotificationsSection() {
 
       {ready && !configured && (
         <p className="text-xs text-gray-500 mt-3 leading-relaxed">
-          Push integration is pending — the backend teammate still needs to
-          send the Firebase Web config and VAPID key. Fire Event History stays
-          usable in the meantime.
+          Push notifications are not ready yet. The backend team still needs to
+          send the Firebase web config and VAPID key. Fire Event History remains
+          available.
         </p>
       )}
 

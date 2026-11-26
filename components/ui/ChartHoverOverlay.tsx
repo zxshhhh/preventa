@@ -10,8 +10,10 @@ import {
   SENSORS,
   alignedIndex,
   chartGeom,
+  clampChartY,
   formatFullTimestamp,
   formatNumber,
+  isWithinChartRange,
   rangeDeltaText,
 } from '@/lib/dashboardData'
 import type { CSSProperties } from 'react'
@@ -26,6 +28,15 @@ const PANEL_W = 288
 const V_GAP = 18
 const NO_AVAILABLE_DATA = 'No available data'
 const LOADING_DATA = 'Loading data…'
+const { M } = CHART_VIEW
+
+/** Screen-space vertical bounds of an SVG chart's plot area. */
+function plotYBounds(rect: DOMRect) {
+  return {
+    plotTop: rect.top + (M.top / CHART_VIEW.H) * rect.height,
+    plotBottom: rect.top + ((CHART_VIEW.H - M.bottom) / CHART_VIEW.H) * rect.height,
+  }
+}
 
 const subscribeNoop = () => () => {}
 const clientTrue = () => true
@@ -102,7 +113,7 @@ function ChartHoverOverlay({ chartSeries, range }: Props) {
     rect: DOMRect,
   ) => ({
     x: rect.left + (geom.xAt(i) / CHART_VIEW.W) * rect.width,
-    y: rect.top + (geom.yAt(v) / CHART_VIEW.H) * rect.height,
+    y: rect.top + (clampChartY(geom.yAt(v)) / CHART_VIEW.H) * rect.height,
   })
 
   const hoveredValue =
@@ -136,8 +147,12 @@ function ChartHoverOverlay({ chartSeries, range }: Props) {
         color: cfg.color,
         missing,
         loading,
+        // Missing/loading dots sit at ymin and stay visible; finite readings
+        // outside the fixed axis must not draw a dot above/below the plot.
+        inRange: missing || isWithinChartRange(p.value, geom),
         label: loading ? 'Loading…' : missing ? NO_AVAILABLE_DATA : formatNumber(p.value as number, cfg.decimals),
         ...toScreen(geom, ai, valueForY, rect),
+        ...plotYBounds(rect),
         active: id === hover.cardId,
       },
     ]
@@ -190,18 +205,23 @@ function ChartHoverOverlay({ chartSeries, range }: Props) {
         className="pointer-events-none fixed inset-0 z-40"
         aria-hidden="true"
       >
-        {/* Crosshair */}
-        <div
-          className="absolute inset-y-0 w-px"
-          style={{
-            left: x,
-            background:
-              'linear-gradient(to bottom, transparent, var(--chart-crosshair) 15%, var(--chart-crosshair) 85%, transparent)',
-          }}
-        />
-
-        {/* Synchronized dots across all sensor charts */}
+        {/* One crosshair per chart, clipped to that chart's plot area */}
         {rows.map((r) => (
+          <div
+            key={`crosshair-${r.id}`}
+            className="absolute w-px"
+            style={{
+              left: r.x,
+              top: r.plotTop,
+              height: r.plotBottom - r.plotTop,
+              background:
+                'linear-gradient(to bottom, transparent, var(--chart-crosshair) 15%, var(--chart-crosshair) 85%, transparent)',
+            }}
+          />
+        ))}
+
+        {/* Synchronized dots across all sensor charts (off-axis readings omitted) */}
+        {rows.filter((r) => r.inRange).map((r) => (
           <div
             key={r.id}
             className="absolute"

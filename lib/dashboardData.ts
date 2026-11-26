@@ -301,8 +301,8 @@ export function deltaFromFirst(points: SeriesPoint[]): number {
 const RANGE_DELTA_TEXT: Record<TrendRange, string> = {
   '1H': 'past hour',
   '24H': 'past 24 hrs',
-  '7D': 'past 7 days',
-  '30D': 'past 30 days',
+  '7D': 'last 7 complete days',
+  '30D': 'last 30 complete days',
 }
 
 /** Human label for the selected trend window, e.g. "past 24 hrs". */
@@ -393,6 +393,18 @@ export function chartGeom(
   const yAt = (v: number) => M.top + innerH - ((v - ymin) / safeSpan) * innerH
 
   return { xAt, yAt, ymin, ymax }
+}
+
+/** True when a finite reading falls inside the chart's rendered y-axis bounds. */
+export function isWithinChartRange(value: number | null | undefined, geom: ChartGeom): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value >= geom.ymin && value <= geom.ymax
+}
+
+/** Keep overlay anchors in the plot area when a reading is outside the fixed axis. */
+export function clampChartY(y: number): number {
+  const top = CHART_VIEW.M.top
+  const bottom = CHART_VIEW.H - CHART_VIEW.M.bottom
+  return Math.max(top, Math.min(y, bottom))
 }
 
 export function contiguousSegments(points: SeriesPoint[]): Array<Array<SeriesPoint & { value: number }>> {
