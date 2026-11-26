@@ -22,7 +22,7 @@ export default function LoginPage() {
           <Image src="/PREVENTA-LOGO.png" alt="PREVENTA" width="80" height="80" className="w-12 sm:w-16 md:w-20 h-auto shrink-0" />
           <div className="min-w-0">
             <h1 className="text-lg sm:text-2xl font-bold leading-tight md:mt-8">Welcome to PREVENTA</h1>
-            <p className="mt-1 md:mt-2 text-xs sm:text-sm text-(--on-accent) leading-relaxed">Fire prevention and sensor monitoring dashboard.</p>
+            <p className="mt-1 md:mt-2 text-xs sm:text-sm text-(--on-accent) leading-relaxed">Fire prevention and sensor activity monitoring.</p>
             <ul className="hidden md:block space-y-3 md:mt-8">
               {features.map((f) => (
                 <li key={f} className="flex items-center gap-3 text-sm text-(--on-accent)">

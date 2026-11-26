@@ -1,6 +1,6 @@
 ﻿'use client'
 
-import { useCallback, useEffect, useId, useRef, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useId, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
 import type { SensorId, SeriesPoint, StatusLevel, RangeWindow, TrendRange } from '@/lib/dashboardData'
 import {
   CHART_RANGES,
@@ -12,6 +12,7 @@ import {
   formatNumber,
   gapRanges,
   lastRealPoint,
+  loadingRanges,
   smoothPath,
 } from '@/lib/dashboardData'
 import { useChartHoverApi } from './ChartHoverProvider'
@@ -19,6 +20,14 @@ import { useChartHoverApi } from './ChartHoverProvider'
 const { W, H, M } = CHART_VIEW
 const INNER_W = W - M.left - M.right
 const INNER_H = H - M.top - M.bottom
+
+/** Static plot-area bounds for the loading hatch (same geometry as the SVG). */
+const HATCH_STYLE: CSSProperties = {
+  left: `${(M.left / W) * 100}%`,
+  top: `${(M.top / H) * 100}%`,
+  width: `${(INNER_W / W) * 100}%`,
+  height: `${(INNER_H / H) * 100}%`,
+}
 
 interface MetricStatus {
   level: StatusLevel
@@ -47,6 +56,8 @@ interface Props {
   hasAnyData: boolean
   lastReadingLabel?: string
   loading?: boolean
+  /** Some buckets are still waiting on paged readings. */
+  pending?: boolean
 }
 
 /** Status pill styling keyed by label; signal colors match the design tokens. */
@@ -56,7 +67,7 @@ const STATUS_CLASS: Record<string, string> = {
   CRITICAL: 'text-red-400 bg-red-400/10',
 }
 
-export default function DashboardMetricCard({
+function DashboardMetricCard({
   id,
   title,
   value,
@@ -77,6 +88,7 @@ export default function DashboardMetricCard({
   hasAnyData,
   lastReadingLabel,
   loading = false,
+  pending = false,
 }: Props) {
   const gid = useId().replace(/:/g, '')
   const svgRef = useRef<SVGSVGElement>(null)
@@ -87,7 +99,9 @@ export default function DashboardMetricCard({
   const hasSeries = chartPoints.length > 1
   const chartLoading = !hasSeries && loading
   const realLast = lastRealPoint(chartPoints)
-  const geom = hasSeries ? chartGeom(chartPoints, CHART_RANGES[id]) : null
+  // SVG path/geometry work is memoized on the bucket array so clock ticks and
+  // unrelated state updates cannot re-build four charts' worth of path strings.
+  const geom = useMemo(() => (hasSeries ? chartGeom(chartPoints, CHART_RANGES[id]) : null), [hasSeries, chartPoints, id])
 
   const fillPct = Math.min(
     100,
@@ -97,7 +111,7 @@ export default function DashboardMetricCard({
   const isUp = delta >= 0
   void window
 
-  const gridTicks = geom ? buildTicks(geom.ymin, geom.ymax, 4) : []
+  const gridTicks = useMemo(() => (geom ? buildTicks(geom.ymin, geom.ymax, 4) : []), [geom])
   const xAxisY = M.top + INNER_H
   const labelIdx = chartPoints.length > 2 ? [0, Math.floor((chartPoints.length - 1) / 2), chartPoints.length - 1] : []
   const labelAnchor = (i: number) => (i === 0 ? 'start' : i === chartPoints.length - 1 ? 'end' : 'middle')
@@ -181,21 +195,45 @@ export default function DashboardMetricCard({
   const getRect = useCallback(() => svgRef.current?.getBoundingClientRect() ?? null, [])
   useEffect(() => register(id, getRect), [register, id, getRect])
 
-  const segments = hasSeries ? contiguousSegments(chartPoints) : []
-  const gaps = hasSeries ? gapRanges(chartPoints) : []
-  const segmentPaths = geom
-    ? segments.map((seg) => {
-        const pts = seg.map((p) => {
-          const index = chartPoints.indexOf(p)
-          return { x: geom.xAt(index), y: geom.yAt(p.value) }
-        })
-        const line = smoothPath(pts)
-        const firstIdx = chartPoints.indexOf(seg[0])
-        const lastIdx = chartPoints.indexOf(seg[seg.length - 1])
-        const area = `${line} L ${geom.xAt(lastIdx)} ${xAxisY} L ${geom.xAt(firstIdx)} ${xAxisY} Z`
-        return { line, area }
+  const segments = useMemo(() => (hasSeries ? contiguousSegments(chartPoints) : []), [hasSeries, chartPoints])
+  const gaps = useMemo(() => (hasSeries ? gapRanges(chartPoints) : []), [hasSeries, chartPoints])
+
+  // Mask the hatch to the buckets still waiting for a page. The stripe layer
+  // itself stays mounted for the whole pending phase, so shrinking the mask as
+  // batches arrive never restarts the animation phase.
+  const pendingMask = useMemo(() => {
+    if (!geom || !pending) return ''
+    const step = chartPoints.length > 1 ? INNER_W / (chartPoints.length - 1) : INNER_W
+    return loadingRanges(chartPoints)
+      .map((range) => {
+        const x1 = Math.max(M.left, geom.xAt(range.start) - step / 2)
+        const x2 = Math.min(W - M.right, geom.xAt(range.end) + step / 2)
+        const from = ((x1 - M.left) / INNER_W) * 100
+        const to = ((x2 - M.left) / INNER_W) * 100
+        if (to <= from) return null
+        return `linear-gradient(90deg, transparent ${from}%, #000 ${from}%, #000 ${to}%, transparent ${to}%)`
       })
-    : []
+      .filter(Boolean)
+      .join(', ')
+  }, [geom, pending, chartPoints])
+
+  const segmentPaths = useMemo(
+    () =>
+      geom
+        ? segments.map((seg) => {
+            const pts = seg.map((p) => {
+              const index = chartPoints.indexOf(p)
+              return { x: geom.xAt(index), y: geom.yAt(p.value) }
+            })
+            const line = smoothPath(pts)
+            const firstIdx = chartPoints.indexOf(seg[0])
+            const lastIdx = chartPoints.indexOf(seg[seg.length - 1])
+            const area = `${line} L ${geom.xAt(lastIdx)} ${xAxisY} L ${geom.xAt(firstIdx)} ${xAxisY} Z`
+            return { line, area }
+          })
+        : [],
+    [geom, segments, chartPoints, xAxisY],
+  )
 
   const statusClass = STATUS_CLASS[status.label] ?? 'text-gray-400 bg-white/5'
   const deltaClass = isUp ? 'text-rose-400 bg-rose-400/10' : 'text-emerald-400 bg-emerald-400/10'
@@ -232,7 +270,7 @@ export default function DashboardMetricCard({
                 <span className="tnum text-4xl font-extrabold text-gray-100 tracking-tight leading-none">{value}</span>
                 <span className="text-sm font-bold text-gray-400">{unit}</span>
               </>
-            ) : loading ? (
+            ) : loading || pending ? (
               <span className="text-4xl font-extrabold text-gray-400 tracking-tight leading-none">-</span>
             ) : (
               <span className="text-2xl font-extrabold text-gray-100 tracking-tight leading-none sm:text-3xl">
@@ -260,7 +298,9 @@ export default function DashboardMetricCard({
                 <span className="text-xs font-semibold text-gray-400">{deltaLabel}</span>
               </>
             ) : hasSeries ? (
-              <span className="text-xs font-semibold text-gray-500">{NO_DATA_GAP_MESSAGE}</span>
+              <span className="text-xs font-semibold text-gray-500">
+                {pending ? 'Loading readings' : NO_DATA_GAP_MESSAGE}
+              </span>
             ) : loading ? (
               <span className="text-xs font-semibold text-gray-500">Loading readings</span>
             ) : (
@@ -270,6 +310,24 @@ export default function DashboardMetricCard({
         </div>
       </div>
       <div className="relative">
+        {/* The diagonal drift is masked to buckets still awaiting data; loaded
+            buckets (and resolved no-data gaps) keep their own rendering. */}
+        {pending && geom && !chartLoading && (
+          <div
+            aria-hidden="true"
+            className="chart-loading-hatch z-0"
+            style={{
+              ...HATCH_STYLE,
+              maskImage: pendingMask || 'none',
+              WebkitMaskImage: pendingMask || 'none',
+              visibility: pendingMask ? 'visible' : 'hidden',
+              maskComposite: 'add',
+              WebkitMaskComposite: 'source-over',
+            }}
+          >
+            <div className="chart-loading-hatch-stripes" />
+          </div>
+        )}
         {chartLoading ? (
           // Ghost chart: fixed placeholder wave in the same viewBox and margins
           // as the real chart so the swap-in causes no layout jump.
@@ -305,9 +363,9 @@ export default function DashboardMetricCard({
           <svg
             ref={svgRef}
             viewBox={`0 0 ${W} ${H}`}
-            className="w-full h-auto block select-none touch-none rounded-lg focus-visible:ring-2 focus-visible:ring-(--focus-ring)"
+            className="relative z-10 w-full h-auto block select-none touch-none rounded-lg focus-visible:ring-2 focus-visible:ring-(--focus-ring)"
             role="img"
-            aria-label={`${title} trend, fixed window. ${hasAnyData ? 'Use left and right arrow keys to inspect each reading.' : NO_DATA_GAP_MESSAGE}`}
+            aria-label={`${title} trend, fixed window. ${pending ? 'Remaining readings still loading. ' : ''}${hasAnyData ? 'Use left and right arrow keys to inspect each reading.' : NO_DATA_GAP_MESSAGE}`}
             tabIndex={0}
             onMouseMove={onMove}
             onMouseLeave={onLeave}
@@ -433,3 +491,5 @@ export default function DashboardMetricCard({
     </div>
   )
 }
+
+export default memo(DashboardMetricCard)

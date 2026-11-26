@@ -1,7 +1,7 @@
 import type { SensorId, SensorSeries, TrendRange, SeriesPoint, RangeWindow } from '@/lib/dashboardData'
 import { RANGE_MS, bucketWindow, formatRangeLabel } from '@/lib/dashboardData'
 import { apiGet } from './client'
-import { CACHE_TAGS, CACHE_TTL, cachedFetch } from './cache'
+import { CACHE_TAGS, CACHE_TTL, cachedFetch, emitCacheProgress } from './cache'
 import { ENDPOINTS } from './endpoints'
 
 const SENSOR_IDS: SensorId[] = ['mq7', 'dht22', 'acs712', 'humidity']
@@ -11,6 +11,8 @@ const PAGE_BATCH = 6
 const MAX_PROBE_REQUESTS = 5
 const ANCHOR_MS = 24 * 60 * 60 * 1000
 const REQUEST_BUDGET = 48
+/** Coalesce fast page batches — every emission re-renders the whole dashboard. */
+const PROGRESS_EMIT_MS = 100
 
 export interface RangeSnapshot {
   range: TrendRange
@@ -19,11 +21,20 @@ export interface RangeSnapshot {
   series: SensorSeries[]
   /** True when fetch completed within caps/budget without known coverage holes. */
   complete: boolean
+  /** True for an in-flight snapshot built from only the pages fetched so far. */
+  partial: boolean
 }
 
 interface FetchWindowOptions {
   signal?: AbortSignal
   budget?: { used: number }
+  /** Freshly fetched readings only (first page, then each batch's delta). */
+  onItems?: (items: ReadingItem[]) => void
+}
+
+export interface FetchRangeOptions extends FetchWindowOptions {
+  /** Partial snapshot for progressive rendering; never cached or persisted. */
+  onProgress?: (snapshot: RangeSnapshot) => void
 }
 
 interface ReadingItem {
@@ -68,6 +79,37 @@ function normalizeReadings(results: ReadingItem[], range: TrendRange, window?: R
   return SENSOR_IDS.map((id) => ({ id, points: buckets[id].sort((a, b) => (a.t ?? 0) - (b.t ?? 0)) }))
 }
 
+/** Merge two t-ascending arrays in O(n + m); paged results can arrive out of order. */
+function mergeSortedPoints(a: SeriesPoint[], b: SeriesPoint[]): SeriesPoint[] {
+  if (!b.length) return a
+  if (!a.length) return b
+  const out: SeriesPoint[] = new Array(a.length + b.length)
+  let i = 0
+  let j = 0
+  let k = 0
+  while (i < a.length && j < b.length) {
+    out[k++] = (a[i].t ?? 0) <= (b[j].t ?? 0) ? a[i++] : b[j++]
+  }
+  while (i < a.length) out[k++] = a[i++]
+  while (j < b.length) out[k++] = b[j++]
+  return out
+}
+
+/** Append one batch without re-normalizing/sorting all previously read pages. */
+function appendReadings(
+  series: SensorSeries[],
+  items: ReadingItem[],
+  range: TrendRange,
+  window: RangeWindow,
+): SensorSeries[] {
+  if (!items.length) return series
+  const additions = normalizeReadings(items, range, window)
+  return series.map((s) => {
+    const add = additions.find((x) => x.id === s.id)?.points ?? []
+    return add.length ? { id: s.id, points: mergeSortedPoints(s.points, add) } : s
+  })
+}
+
 function withPage(params: URLSearchParams, page: number): string {
   const next = new URLSearchParams(params)
   next.set('page', String(page))
@@ -76,6 +118,15 @@ function withPage(params: URLSearchParams, page: number): string {
 
 function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+}
+
+function notifyItems(options: FetchWindowOptions, items: ReadingItem[]) {
+  if (!options.onItems) return
+  try {
+    options.onItems(items)
+  } catch {
+    /* progress reporting must never break the underlying fetch */
+  }
 }
 
 async function getReadings(path: string, options: FetchWindowOptions): Promise<PaginatedReadings | null> {
@@ -99,22 +150,24 @@ async function fetchReadingsWindow(
   startMs: number,
   endMs: number,
   options: FetchWindowOptions = {},
-): Promise<{ items: ReadingItem[]; complete: boolean }> {
+): Promise<{ complete: boolean }> {
   const params = new URLSearchParams({
     start: new Date(startMs).toISOString(),
     end: new Date(endMs).toISOString(),
   })
 
   const first = await getReadings(`${ENDPOINTS.readings}?${params.toString()}`, options)
-  if (!first) return { items: [], complete: false }
+  if (!first) return { complete: false }
   const firstResults = first.results ?? []
-  if (!firstResults.length) return { items: [], complete: true }
+  if (!firstResults.length) return { complete: true }
 
   const pageSize = firstResults.length
   const totalPages = Math.max(1, Math.ceil((first.count ?? pageSize) / pageSize))
   const pages = pageNumbers(totalPages).filter((p) => p !== 1)
 
-  const rest: ReadingItem[] = []
+  // The first page is enough to render: publish it before waiting for the rest.
+  notifyItems(options, firstResults)
+
   let complete = totalPages <= MAX_PAGES
   for (let i = 0; i < pages.length; i += PAGE_BATCH) {
     const batch = pages.slice(i, i + PAGE_BATCH)
@@ -134,14 +187,16 @@ async function fetchReadingsWindow(
         }
       }),
     )
-    for (const items of results) rest.push(...items)
+    const fresh: ReadingItem[] = []
+    for (const items of results) fresh.push(...items)
+    notifyItems(options, fresh)
     if (options.budget && options.budget.used >= REQUEST_BUDGET) {
       complete = false
       break
     }
   }
 
-  return { items: [...firstResults, ...rest], complete }
+  return { complete }
 }
 
 async function probeHasData(startMs: number, endMs: number, options: FetchWindowOptions): Promise<boolean | null> {
@@ -197,12 +252,28 @@ async function findNearestDataStart(window: RangeWindow, options: FetchWindowOpt
   return Math.max(window.start, lo)
 }
 
-async function fetchRangeSnapshot(range: TrendRange, options: FetchWindowOptions = {}): Promise<RangeSnapshot> {
+async function fetchRangeSnapshot(range: TrendRange, options: FetchRangeOptions = {}): Promise<RangeSnapshot> {
   const end = Date.now()
   const start = end - RANGE_MS[range]
   const window: RangeWindow = { start, end }
   const budget = options.budget ?? { used: 0 }
-  const opts: FetchWindowOptions = { ...options, budget }
+  let series = SENSOR_IDS.map((id) => ({ id, points: [] as SeriesPoint[] }))
+  let lastEmit = 0
+  const publishProgress = () => {
+    if (!options.onProgress) return
+    const at = Date.now()
+    if (at - lastEmit < PROGRESS_EMIT_MS) return
+    lastEmit = at
+    options.onProgress({ range, window, series, complete: false, partial: true })
+  }
+  const opts: FetchWindowOptions = {
+    ...options,
+    budget,
+    onItems: (items) => {
+      series = appendReadings(series, items, range, window)
+      publishProgress()
+    },
+  }
 
   let fetchStart = start
   let complete = true
@@ -213,7 +284,7 @@ async function fetchRangeSnapshot(range: TrendRange, options: FetchWindowOptions
     if (anchorHasData === false) {
       const nearest = await findNearestDataStart(window, opts)
       if (nearest == null) {
-        return { range, window, series: SENSOR_IDS.map((id) => ({ id, points: [] })), complete: false }
+        return { range, window, series: SENSOR_IDS.map((id) => ({ id, points: [] })), complete: false, partial: false }
       }
       fetchStart = nearest
       complete = nearest <= start
@@ -222,12 +293,13 @@ async function fetchRangeSnapshot(range: TrendRange, options: FetchWindowOptions
     }
   }
 
-  const { items, complete: fetchComplete } = await fetchReadingsWindow(fetchStart, end, opts)
+  const { complete: fetchComplete } = await fetchReadingsWindow(fetchStart, end, opts)
   return {
     range,
     window,
-    series: normalizeReadings(items, range, window),
+    series,
     complete: complete && fetchComplete,
+    partial: false,
   }
 }
 
@@ -241,7 +313,7 @@ function isRangeSnapshot(value: unknown): value is RangeSnapshot {
 }
 
 function emptySnapshot(range: TrendRange, window: RangeWindow): RangeSnapshot {
-  return { range, window, series: SENSOR_IDS.map((id) => ({ id, points: [] })), complete: false }
+  return { range, window, series: SENSOR_IDS.map((id) => ({ id, points: [] })), complete: false, partial: false }
 }
 
 /**
@@ -258,21 +330,29 @@ function normalizeSnapshot(value: unknown, range: TrendRange): RangeSnapshot {
         ? v.window
         : fallbackWindow
     const series = Array.isArray(v.series) ? v.series : []
-    return { range, window: w, series: series as SensorSeries[], complete: Boolean(v.complete) }
+    return { range, window: w, series: series as SensorSeries[], complete: Boolean(v.complete), partial: false }
   }
   // Legacy persisted shape: SensorSeries[]
   if (Array.isArray(value)) {
-    return { range, window: fallbackWindow, series: value as SensorSeries[], complete: false }
+    return { range, window: fallbackWindow, series: value as SensorSeries[], complete: false, partial: false }
   }
   return emptySnapshot(range, fallbackWindow)
 }
 
-export function fetchRangeRaw(range: TrendRange, options: FetchWindowOptions = {}): Promise<RangeSnapshot> {
+export function fetchRangeRaw(range: TrendRange, options: FetchRangeOptions = {}): Promise<RangeSnapshot> {
+  const key = `range:${range}`
   return cachedFetch(
-    `range:${range}`,
+    key,
     async () => {
       try {
-        return await fetchRangeSnapshot(range, options)
+        return await fetchRangeSnapshot(range, {
+          ...options,
+          onProgress: (snapshot) => {
+            // Progress is display-only: subscribers see it, the cache does not.
+            emitCacheProgress(key, snapshot)
+            options.onProgress?.(snapshot)
+          },
+        })
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') throw err
         throw err

@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { SensorId, SensorSeries, SeriesPoint } from '@/lib/dashboardData'
 import { isApiConfigured } from '@/lib/api/config'
-import { fetchLatestSeries, fetchRangeRaw } from '@/lib/api/telemetry'
+import { fetchLatestSeries, fetchRangeRaw, type RangeSnapshot } from '@/lib/api/telemetry'
 import { connectLiveTelemetry, type SensorPoint, type FusionData } from '@/lib/api/realtime'
 import { refreshAccessToken } from '@/lib/api/auth'
 import { isPushConfigured, onForegroundPush, parsePushAlert, type PushAlert } from '@/lib/api/push'
@@ -44,6 +44,8 @@ interface SensorsContextType {
   lastWsReadingAt: number | null
   /** Timestamp of the newest reading currently shown (live or restored from disk). */
   liveSavedAt: number | null
+  /** True while the one-time 1H seed is still delivering paged readings. */
+  liveSeeding: boolean
   notifications: SensorEvent[]
   unreadCount: number
   markAllRead: () => void
@@ -150,6 +152,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
   const [liveStatus, setLiveStatus] = useState<LiveStatus>('idle')
   const [lastWsReadingAt, setLastWsReadingAt] = useState<number | null>(null)
   const [liveSavedAt, setLiveSavedAt] = useState<number | null>(null)
+  const [liveSeeding, setLiveSeeding] = useState(false)
   const [notifications, setNotifications] = useState<SensorEvent[]>(loadStoredEvents)
   const [toasts, setToasts] = useState<SensorToast[]>([])
 
@@ -320,32 +323,62 @@ export function SensorProvider({ children }: { children: ReactNode }) {
     void backfill()
     const backfillId = setInterval(backfill, BACKFILL_POLL_MS)
 
+    // Merge a (possibly partial) 1H snapshot into the live buffers. The same
+    // routine handles page progress and the final snapshot, so LIVE paints the
+    // first page while the remaining pages are still loading.
+    function mergeSeedSnapshot(snapshot: RangeSnapshot): boolean {
+      let changed = false
+      for (const s of snapshot.series) {
+        if (!s.points.length) continue
+        const buf = buffersRef.current[s.id]
+        const seedPoints = s.points.filter((p) => typeof p.t === 'number' && Number.isFinite(p.t))
+        const seedLastT = seedPoints.length ? seedPoints[seedPoints.length - 1].t ?? 0 : 0
+        // Keep snapshot/live points newer than the seed's tail — this covers
+        // both a WS race and a restored snapshot after an offline reload.
+        const fresh = buf.filter((p) => typeof p.t === 'number' && (!seedLastT || p.t > seedLastT))
+        // Seed is ascending; append preserved live tail so order is maintained.
+        const merged = [...seedPoints.filter((p) => typeof p.t === 'number' && (!seedLastT || p.t <= seedLastT)), ...fresh]
+        if (merged.length) {
+          buffersRef.current[s.id] = merged.slice(-MAX_BUFFER)
+          changed = true
+        }
+      }
+      return changed
+    }
+
     // One-time LIVE seed: fill the buffers with the backend's last hour so the
     // dashboard's LIVE chart opens with a full span. Everything after this comes
     // purely from the WebSocket stream — this is the only time-based fetch for LIVE.
+    // Page batches are coalesced into one frame so several fast pages cannot
+    // each rebuild all four series and re-render the dashboard.
+    let seedFrame: number | null = null
+    function scheduleSeedRebuild() {
+      if (seedFrame !== null || cancelled) return
+      seedFrame = requestAnimationFrame(() => {
+        seedFrame = null
+        if (!cancelled) rebuildSeries()
+      })
+    }
+
     async function seedHour() {
       try {
-        const snapshot = await fetchRangeRaw('1H')
+        const snapshot = await fetchRangeRaw('1H', {
+          onProgress: (partial) => {
+            if (cancelled) return
+            setLiveSeeding(true)
+            if (mergeSeedSnapshot(partial)) scheduleSeedRebuild()
+          },
+        })
         if (cancelled) return
-        let changed = false
-        for (const s of snapshot.series) {
-          if (!s.points.length) continue
-          const buf = buffersRef.current[s.id]
-          const seedPoints = s.points.filter((p) => typeof p.t === 'number' && Number.isFinite(p.t))
-          const seedLastT = seedPoints.length ? seedPoints[seedPoints.length - 1].t ?? 0 : 0
-          // Keep snapshot/live points newer than the seed's tail — this covers
-          // both a WS race and a restored snapshot after an offline reload.
-          const fresh = buf.filter((p) => typeof p.t === 'number' && (!seedLastT || p.t > seedLastT))
-          // Seed is ascending; append preserved live tail so order is maintained.
-          const merged = [...seedPoints.filter((p) => typeof p.t === 'number' && (!seedLastT || p.t <= seedLastT)), ...fresh]
-          if (merged.length) {
-            buffersRef.current[s.id] = merged.slice(-MAX_BUFFER)
-            changed = true
-          }
+        if (seedFrame !== null) {
+          cancelAnimationFrame(seedFrame)
+          seedFrame = null
         }
-        if (changed) rebuildSeries()
+        if (mergeSeedSnapshot(snapshot)) rebuildSeries()
       } catch {
         /* seed is best-effort — live stream continues regardless */
+      } finally {
+        if (!cancelled) setLiveSeeding(false)
       }
     }
 
@@ -353,6 +386,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true
+      if (seedFrame !== null) cancelAnimationFrame(seedFrame)
       // Invalidate callbacks from this socket before closing it.
       wsGenerationRef.current += 1
       if (wsRef.current) wsRef.current.close()
@@ -530,6 +564,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
       liveStatus: effectiveLiveStatus,
       lastWsReadingAt,
       liveSavedAt,
+      liveSeeding,
       notifications,
       unreadCount,
       markAllRead,
@@ -543,6 +578,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
       effectiveLiveStatus,
       lastWsReadingAt,
       liveSavedAt,
+      liveSeeding,
       notifications,
       unreadCount,
       markAllRead,

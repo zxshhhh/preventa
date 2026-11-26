@@ -1,4 +1,4 @@
-﻿import { useEffect, useState, type ReactNode } from 'react'
+﻿import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useOnline, formatSavedAt } from '@/lib/useOnline'
 import { isApiConfigured } from '@/lib/api/config'
 import { useSensors } from '@/context/useSensors'
@@ -91,6 +91,8 @@ interface Props {
   window: RangeWindow | null
   /** True when the selected fixed window has resolved with no real readings. */
   empty: boolean
+  /** True while paged readings are still arriving for the selected window. */
+  pending: boolean
 }
 
 export default function DashboardSensorCards({
@@ -100,6 +102,7 @@ export default function DashboardSensorCards({
   cachedAt,
   window,
   empty,
+  pending,
 }: Props) {
   const online = useOnline()
   const { liveStatus, lastWsReadingAt } = useSensors()
@@ -149,7 +152,7 @@ export default function DashboardSensorCards({
 
   // Card values are anchored to real readings inside the selected fixed window.
   // Gap buckets (value null) are rendered as gray diagonal no-data gaps.
-  const cards: CardData[] = CARD_ORDER.map((id) => {
+  const cards: CardData[] = useMemo(() => CARD_ORDER.map((id) => {
     const cfg = SENSORS[id]
     const chartPoints = chartSeries.find((x) => x.id === id)?.points ?? []
     const anyData = hasRealData(chartPoints)
@@ -177,7 +180,7 @@ export default function DashboardSensorCards({
       hasAnyData: anyData,
       lastReadingLabel: tailGap ? 'Last reading' : undefined,
     }
-  })
+  }), [chartSeries, range, liveFeed])
 
   return (
     <ChartHoverProvider>
@@ -235,6 +238,7 @@ export default function DashboardSensorCards({
               window={window}
               range={range}
               loading={chartLoading}
+              pending={pending}
             />
           ))}
         </div>

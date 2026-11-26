@@ -13,9 +13,12 @@ import RecentReportLog from '@/components/RecentReportLog'
 import DashboardSensorCards from '@/components/DashboardSensorCards'
 
 const RANGE_REFRESH_MS = 60_000
+/** Quantize the clock so 5 s ticks don't shift every bucket in four charts. */
+const WINDOW_STEP_MS = 30_000
+const quantizeWindowEnd = (ts: number) => Math.floor(ts / WINDOW_STEP_MS) * WINDOW_STEP_MS
 
 export default function DashboardContent() {
-  const { series, liveSavedAt } = useSensors()
+  const { series, liveSavedAt, liveSeeding } = useSensors()
   const [range, setRange] = useState<TrendRange>('1H')
   const [now, setNow] = useState(0)
 
@@ -29,14 +32,15 @@ export default function DashboardContent() {
     }
   }, [])
 
+  const bucketNow = now > 0 ? quantizeWindowEnd(now) : 0
   const liveWindow = useMemo<RangeWindow>(() => {
-    const end = now
+    const end = bucketNow
     return { start: end - RANGE_MS['1H'], end }
-  }, [now])
+  }, [bucketNow])
 
   // Historical ranges come from the in-memory API cache; the hook re-runs the
   // cached fetch on the existing 60 s cadence and re-renders when it refreshes.
-  const { data: remoteSnapshot, savedAt: savedRangeAt } = useCachedQuery<RangeSnapshot>(
+  const { data: remoteSnapshot, progress: rangeProgress, savedAt: savedRangeAt } = useCachedQuery<RangeSnapshot>(
     range === '1H' ? null : `range:${range}`,
     () => fetchRangeRaw(range),
     {
@@ -50,21 +54,24 @@ export default function DashboardContent() {
   // LIVE is a fixed 1-hour window over the real-time WS buffer. Missing buckets
   // are explicit gaps (no carry-fill/stretching).
   const liveChart = useMemo(
-    () => series.map((s) => ({ id: s.id, points: bucketWindow(s.points, '1H', liveWindow) })),
-    [series, liveWindow],
+    () => series.map((s) => ({ id: s.id, points: bucketWindow(s.points, '1H', liveWindow, { pending: liveSeeding }) })),
+    [series, liveWindow, liveSeeding],
   )
 
   const displayWindow = useMemo<RangeWindow | null>(() => {
     if (range === '1H') return liveWindow
-    const end = now
+    const end = bucketNow
     return { start: end - RANGE_MS[range], end }
-  }, [range, liveWindow, now])
+  }, [range, liveWindow, bucketNow])
 
   const chartSeries = useMemo(() => {
     if (range === '1H') return liveChart
 
-    const base = remoteSnapshot
+    // The first fetched page is rendered immediately; the rest of the window
+    // stays marked as pending until the final, cached snapshot arrives.
+    const base = rangeProgress ?? remoteSnapshot
     if (!base || !displayWindow) return []
+    const pending = rangeProgress !== null
     return base.series.map((s) => {
       const live = series.find((l) => l.id === s.id)?.points ?? []
       const merged = [...s.points, ...live].filter(
@@ -74,10 +81,10 @@ export default function DashboardContent() {
       // fixed-duration window so 24H/7D/30D follow current time between polls.
       return {
         id: s.id,
-        points: bucketWindow(merged, range, displayWindow),
+        points: bucketWindow(merged, range, displayWindow, { pending }),
       }
     })
-  }, [remoteSnapshot, range, series, liveChart, displayWindow])
+  }, [rangeProgress, remoteSnapshot, range, series, liveChart, displayWindow])
 
   const chartWindow: RangeWindow | null = displayWindow
   const chartEmpty = chartSeries.length > 0 && chartSeries.every((s) => !hasRealData(s.points))
@@ -94,6 +101,7 @@ export default function DashboardContent() {
         cachedAt={range === '1H' ? liveSavedAt : savedRangeAt}
         window={chartWindow}
         empty={chartResolved && chartEmpty}
+        pending={range === '1H' ? liveSeeding : rangeProgress !== null}
       />
     </div>
   )

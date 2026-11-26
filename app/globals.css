@@ -274,6 +274,42 @@ html.a11y-reduce-motion .ember-grid::before {
     }
 }
 
+/* Loading hatch for buckets still awaiting a paged history fetch. The layer is
+   masked by the card to only the pending plot buckets, so loaded points and
+   resolved no-data gaps are untouched. The stripes are a true diagonal gradient
+   (no rotated box, so no uncovered corners); moving the layer by exactly one
+   8px period along the gradient axis loops without any snap. */
+@utility chart-loading-hatch {
+    position: absolute;
+    overflow: hidden;
+    pointer-events: none;
+    border-radius: 8px;
+    background-color: color-mix(in srgb, var(--bg-color) 20%, transparent);
+}
+
+@utility chart-loading-hatch-stripes {
+    position: absolute;
+    /* Oversized by more than one period so edges never enter the visible box. */
+    inset: -12px;
+    background-image: repeating-linear-gradient(135deg, transparent 0 4px, var(--chart-grid-strong) 4px 8px);
+    animation: hatch-drift 1.1s linear infinite;
+    will-change: transform;
+}
+
+/* 8px along a 135° axis = (8 / √2, 8 / √2) ≈ 5.657px on each screen axis. */
+@keyframes hatch-drift {
+    from {
+        transform: translate3d(-5.657px, -5.657px, 0);
+    }
+    to {
+        transform: translate3d(0, 0, 0);
+    }
+}
+
+html.a11y-reduce-motion .chart-loading-hatch-stripes {
+    animation: none;
+}
+
 @utility btn-primary {
     @apply inline-flex items-center justify-center gap-2 text-(--on-ember) font-bold rounded-xl cursor-pointer transition-all duration-200 hover:-translate-y-0.5 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-(--focus-ring) focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) disabled:opacity-50 disabled:pointer-events-none;
     background-image: linear-gradient(135deg, var(--ember-start), var(--ember-end));

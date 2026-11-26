@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useReducer, useSyncExternalStore } from 'react'
+import { memo, useEffect, useReducer, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import type { SensorSeries, TrendRange } from '@/lib/dashboardData'
 import {
@@ -25,12 +25,13 @@ interface Props {
 const PANEL_W = 288
 const V_GAP = 18
 const NO_AVAILABLE_DATA = 'No available data'
+const LOADING_DATA = 'Loading data…'
 
 const subscribeNoop = () => () => {}
 const clientTrue = () => true
 const serverFalse = () => false
 
-export default function ChartHoverOverlay({ chartSeries, range }: Props) {
+function ChartHoverOverlay({ chartSeries, range }: Props) {
   const hover = useChartHover()
   const api = useChartHoverApi()
 
@@ -124,6 +125,7 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
     const p = series.points[ai]
     const cfg = SENSORS[id]
     const missing = !(typeof p.value === 'number' && Number.isFinite(p.value))
+    const loading = p.loading === true && missing
     const valueForY = missing ? geom.ymin : (p.value as number)
 
     return [
@@ -133,7 +135,8 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
         unit: cfg.unit,
         color: cfg.color,
         missing,
-        label: missing ? NO_AVAILABLE_DATA : formatNumber(p.value as number, cfg.decimals),
+        loading,
+        label: loading ? 'Loading…' : missing ? NO_AVAILABLE_DATA : formatNumber(p.value as number, cfg.decimals),
         ...toScreen(geom, ai, valueForY, rect),
         active: id === hover.cardId,
       },
@@ -143,17 +146,20 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
   const timestamp = formatFullTimestamp(hoverT, range)
   const hoveredCfg = SENSORS[hover.cardId]
   const hoveredMissing = !(typeof hoveredPoint.value === 'number' && Number.isFinite(hoveredPoint.value))
+  const hoveredLoading = hoveredMissing && hoveredPoint.loading === true
 
-  const announce = hoveredMissing
-    ? `${hoveredCfg.name}, ${NO_AVAILABLE_DATA}, ${timestamp}`
-    : `${hoveredCfg.name} ${formatNumber(hoveredPoint.value as number, hoveredCfg.decimals)} ${hoveredCfg.unit}, ${timestamp}`
+  const announce = hoveredLoading
+    ? `${hoveredCfg.name}, ${LOADING_DATA}, ${timestamp}`
+    : hoveredMissing
+      ? `${hoveredCfg.name}, ${NO_AVAILABLE_DATA}, ${timestamp}`
+      : `${hoveredCfg.name} ${formatNumber(hoveredPoint.value as number, hoveredCfg.decimals)} ${hoveredCfg.unit}, ${timestamp}`
 
   const vw = window.innerWidth
   const vh = window.innerHeight
 
   const margin = 12
   // The no-data panel is a single line; the detail panel needs room for four rows.
-  const COMFORTABLE_H = hoveredMissing ? 120 : 250
+  const COMFORTABLE_H = hoveredMissing && !hoveredLoading ? 120 : 250
   const panelWidth = Math.min(PANEL_W, vw - margin * 2)
 
   // Keep the panel under the point, centered horizontally and clamped on-screen.
@@ -216,10 +222,14 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
               className={
                 'relative block rounded-full border-2 ' +
                 (r.active ? 'h-4 w-4 ' : 'h-3.5 w-3.5 ') +
-                (r.missing ? 'border-gray-400/70' : 'border-white')
+                (r.loading
+                  ? 'animate-pulse border-gray-300/80'
+                  : r.missing ? 'border-gray-400/70' : 'border-white')
               }
               style={{
-                backgroundColor: r.missing ? 'rgba(148,163,184,0.35)' : r.color,
+                backgroundColor: r.loading
+                  ? 'rgba(148,163,184,0.55)'
+                  : r.missing ? 'rgba(148,163,184,0.35)' : r.color,
                 boxShadow: r.active
                   ? `0 0 0 5px color-mix(in srgb, ${r.missing ? '#94a3b8' : r.color} 25%, transparent), 0 4px 14px rgba(0,0,0,0.45)`
                   : '0 2px 8px rgba(0,0,0,0.4)',
@@ -244,11 +254,12 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
                 </p>
               </div>
             </div>
-            {hoveredMissing ? (
+            {(hoveredLoading || hoveredMissing) && (
               <p role="status" className="mt-2 text-sm font-semibold text-gray-300">
-                {NO_AVAILABLE_DATA}
+                {hoveredLoading ? LOADING_DATA : NO_AVAILABLE_DATA}
               </p>
-            ) : (
+            )}
+            {!hoveredMissing || hoveredLoading ? (
               <div className="mt-2 sm:mt-3 space-y-1">
                 {rows.map((r) => (
                   <div
@@ -274,7 +285,7 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
                   </div>
                 ))}
               </div>
-            )}
+            ) : null}
           </div>
         </div>
       </div>
@@ -285,3 +296,5 @@ export default function ChartHoverOverlay({ chartSeries, range }: Props) {
     document.body,
   )
 }
+
+export default memo(ChartHoverOverlay)

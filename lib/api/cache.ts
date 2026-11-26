@@ -85,6 +85,8 @@ interface CacheEvent {
   value?: unknown
   refreshing: boolean
   invalidated?: boolean
+  /** Intermediate, non-cached value published while a fetch is still running. */
+  partial?: boolean
 }
 
 type Listener = (event: CacheEvent) => void
@@ -217,6 +219,15 @@ function emit(key: string, event: CacheEvent): void {
       /* one bad subscriber must not break the cache */
     }
   }
+}
+
+/**
+ * Broadcast an intermediate value (e.g. the first page of a history range) to
+ * subscribers without writing it to memory or localStorage. The final
+ * `cachedFetch` result still arrives as the normal value event.
+ */
+export function emitCacheProgress(key: string, value: unknown): void {
+  emit(key, { value, refreshing: true, partial: true })
 }
 
 function refresh<T>(fullKey: string, key: string, fetcher: () => Promise<T>, options: CacheOptions<T>): Promise<T> {

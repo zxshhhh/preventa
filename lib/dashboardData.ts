@@ -24,6 +24,8 @@ export interface SeriesPoint {
   t?: number
   /** True when this bucket had no device reading in the selected window. */
   gap?: boolean
+  /** True when this bucket is unresolved because range pages are still loading. */
+  loading?: boolean
 }
 
 export interface SensorSeries {
@@ -158,7 +160,12 @@ export interface RangeWindow {
   end: number
 }
 
-export function bucketWindow(points: SeriesPoint[], range: TrendRange, window: RangeWindow): WindowedSeriesPoint[] {
+export function bucketWindow(
+  points: SeriesPoint[],
+  range: TrendRange,
+  window: RangeWindow,
+  options: { pending?: boolean } = {},
+): WindowedSeriesPoint[] {
   const bucketCount = BUCKET_COUNT[range]
   const start = window.start
   const end = window.end
@@ -186,7 +193,8 @@ export function bucketWindow(points: SeriesPoint[], range: TrendRange, window: R
       t,
       label: formatRangeLabel(t, range),
       value: hasData ? sums[i] / counts[i] : null,
-      gap: !hasData,
+      gap: !hasData && options.pending !== true,
+      loading: !hasData && options.pending === true,
     })
   }
 
@@ -402,19 +410,32 @@ export function contiguousSegments(points: SeriesPoint[]): Array<Array<SeriesPoi
   return segments
 }
 
-export function gapRanges(points: SeriesPoint[]): Array<{ start: number; end: number }> {
+function bucketRanges(points: SeriesPoint[], matches: (point: SeriesPoint) => boolean): Array<{ start: number; end: number }> {
   const ranges: Array<{ start: number; end: number }> = []
   let start: number | null = null
   for (let i = 0; i < points.length; i++) {
-    const missing = !(typeof points[i].value === 'number' && Number.isFinite(points[i].value))
-    if (missing && start === null) start = i
-    if (!missing && start !== null) {
+    const hit = matches(points[i])
+    if (hit && start === null) start = i
+    if (!hit && start !== null) {
       ranges.push({ start, end: i - 1 })
       start = null
     }
   }
   if (start !== null) ranges.push({ start, end: points.length - 1 })
   return ranges
+}
+
+/** Resolved no-data buckets (loading buckets are excluded). */
+export function gapRanges(points: SeriesPoint[]): Array<{ start: number; end: number }> {
+  return bucketRanges(
+    points,
+    (p) => p.loading !== true && !(typeof p.value === 'number' && Number.isFinite(p.value)),
+  )
+}
+
+/** Buckets still waiting on range pages — rendered with the animated hatch. */
+export function loadingRanges(points: SeriesPoint[]): Array<{ start: number; end: number }> {
+  return bucketRanges(points, (p) => p.loading === true)
 }
 
 

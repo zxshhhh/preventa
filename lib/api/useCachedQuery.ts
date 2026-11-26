@@ -16,6 +16,8 @@ export interface CachedQuery<T> {
   data: T | null
   error: unknown
   refreshing: boolean
+  /** Latest uncached intermediate value while a fetch is still in flight. */
+  progress: T | null
   refresh: () => Promise<void>
   /** True when the displayed value is older than its fresh TTL. */
   stale: boolean
@@ -41,6 +43,7 @@ export function useCachedQuery<T>(
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<unknown>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [progress, setProgress] = useState<T | null>(null)
   const [stale, setStale] = useState(false)
   const [savedAt, setSavedAt] = useState<number | null>(null)
 
@@ -77,9 +80,11 @@ export function useCachedQuery<T>(
         const value = await cachedFetch<T>(k, fetcherRef.current, { ...optionsRef.current, fresh })
         dataRef.current = value
         setData(value)
+        setProgress(null)
         setError(null)
         syncMeta(k)
       } catch (err) {
+        setProgress(null)
         // A saved snapshot is still on screen — don't replace it with a red banner
         // just because the network is down.
         if (!onlineRef.current && dataRef.current != null) {
@@ -104,6 +109,7 @@ export function useCachedQuery<T>(
     const t = setTimeout(() => {
       dataRef.current = null
       setData(null)
+      setProgress(null)
       setError(null)
       setSavedAt(null)
       setStale(false)
@@ -118,12 +124,21 @@ export function useCachedQuery<T>(
     const unsubscribe = subscribeCache(key, (event) => {
       if (!active) return
       if (event.invalidated) {
+        setProgress(null)
         void runRef.current(true)
+        return
+      }
+      // Partial pages are display-only: never overwrite the cached value or
+      // its freshness metadata with an incomplete snapshot.
+      if (event.partial) {
+        if (event.value !== undefined) setProgress(event.value as T)
+        setRefreshing(true)
         return
       }
       if (event.value !== undefined) {
         dataRef.current = event.value as T
         setData(event.value as T)
+        setProgress(null)
         syncMeta(key)
       }
       setRefreshing(event.refreshing)
@@ -157,5 +172,5 @@ export function useCachedQuery<T>(
     return () => clearInterval(id)
   }, [enabled, options.pollMs])
 
-  return { data, error, refreshing, refresh, stale, savedAt, offline: !online }
+  return { data, error, refreshing, progress, refresh, stale, savedAt, offline: !online }
 }
