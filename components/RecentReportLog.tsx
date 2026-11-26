@@ -14,7 +14,7 @@ import {
   eventReadingsCacheKey,
   LOGS_CACHE_KEY,
 } from '@/lib/api/reports'
-import { formatTime } from '@/lib/logReport'
+import { formatTime, statusClass } from '@/lib/logReport'
 import { formatNumber } from '@/lib/dashboardData'
 import type { LogEntry, ReadingEntry } from '@/lib/logReport'
 import { SkeletonBar } from '@/components/ui/Skeleton'
@@ -22,13 +22,6 @@ import { SkeletonBar } from '@/components/ui/Skeleton'
 const MAX_REPORTS = 3
 const SKELETON_REPORTS = [0, 1, 2] as const
 const EMPTY_LOGS: LogEntry[] = []
-
-const TIER_BADGE: Record<number, { badge: string; label: string }> = {
-  1: { badge: 'bg-(--green-indicator)/15 text-(--green-indicator)', label: 'Normal' },
-  2: { badge: 'bg-(--secondary-color)/15 text-(--secondary-color)', label: 'Mild' },
-  3: { badge: 'bg-amber-400/15 text-amber-400', label: 'Warning' },
-  4: { badge: 'bg-(--red-indicator)/15 text-(--red-indicator)', label: 'Severe' },
-}
 
 const READING_FIELDS = [
   { label: 'Gas', unit: 'PPM', keys: ['smooth_ppm', 'gas', 'ppm', 'mq7'] },
@@ -80,18 +73,8 @@ function readingDisplayValue(values: Record<string, unknown>, keys: readonly str
   return '—'
 }
 
-function TierBadge({ tier }: { tier: number }) {
-  const cfg = TIER_BADGE[tier] ?? TIER_BADGE[1]
-  return (
-    <span className={`text-xs font-extrabold px-2.5 py-1 rounded-full whitespace-nowrap ${cfg.badge}`}>
-      {cfg.label} (Tier {tier})
-    </span>
-  )
-}
-
 function ReportCard({ log, reading }: { log: LogEntry; reading: ReportReading | undefined }) {
   const hydrated = useHydrated()
-  const tier = log.peakTier ?? 1
   const r = reading ?? { state: 'loading' as const, reading: null }
 
   return (
@@ -105,7 +88,9 @@ function ReportCard({ log, reading }: { log: LogEntry; reading: ReportReading | 
             {hydrated ? formatDate(log.timestamp) : <span className="text-gray-500">—</span>}
           </p>
         </div>
-        <TierBadge tier={tier} />
+        <span className={'shrink-0 text-xs font-bold px-2.5 py-1 rounded-full whitespace-nowrap ' + statusClass(log.status)}>
+          {log.status}
+        </span>
       </div>
 
       <div className="grid grid-cols-3 gap-2">

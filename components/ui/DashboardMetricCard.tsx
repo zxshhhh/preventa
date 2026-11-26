@@ -197,6 +197,9 @@ function DashboardMetricCard({
 
   const segments = useMemo(() => (hasSeries ? contiguousSegments(chartPoints) : []), [hasSeries, chartPoints])
   const gaps = useMemo(() => (hasSeries ? gapRanges(chartPoints) : []), [hasSeries, chartPoints])
+  // A one-bucket run has no visible stroke (smoothPath emits only a moveto), so
+  // mark it with a dot — otherwise a solitary reading looks like an empty gap.
+  const isolatedPoints = useMemo(() => segments.filter((seg) => seg.length === 1).map((seg) => seg[0]), [segments])
 
   // Mask the hatch to the buckets still waiting for a page. The stripe layer
   // itself stays mounted for the whole pending phase, so shrinking the mask as
@@ -431,6 +434,20 @@ function DashboardMetricCard({
             {segmentPaths.map((seg, i) => (
               <path key={`line-${i}`} d={seg.line} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
             ))}
+            {geom && isolatedPoints.map((p) => {
+              // The newest reading already has its own (pulsing) marker.
+              if (p === realLast) return null
+              const i = chartPoints.indexOf(p)
+              if (i < 0) return null
+              const cx = geom.xAt(i)
+              const cy = geom.yAt(p.value)
+              return (
+                <g key={`isolated-${i}`}>
+                  <circle cx={cx} cy={cy} r="6" fill={color} opacity="0.14" />
+                  <circle cx={cx} cy={cy} r="3" fill={color} />
+                </g>
+              )
+            })}
             {realLast && geom && lastRealIdx >= 0 && (
               <g>
                 {pulse && <circle className="dot-ping" cx={lastX} cy={lastY} r="4" fill={color} />}
