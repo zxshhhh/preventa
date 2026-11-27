@@ -48,6 +48,23 @@ export default function LoginForm() {
     return () => window.clearTimeout(t)
   }, [])
 
+  // Cache Components keeps this route mounted via React <Activity> instead of
+  // unmounting it, so refs/state survive a logout/login cycle. Reset the one-shot
+  // navigation latch (and stale form state) when Next hides the route; otherwise
+  // the next user's login would be skipped by `navigatedRef.current` below.
+  useEffect(() => {
+    return () => {
+      navigatedRef.current = false
+      setUsername('')
+      setPassword('')
+      setShowPassword(false)
+      setRememberMe(false)
+      setRegistered(false)
+      setError(null)
+      setSubmitting(false)
+    }
+  }, [])
+
   // Signed-in users never see the login form — this also handles the post-login
   // navigation, so there is a single place that reads and validates `next`.
   useEffect(() => {

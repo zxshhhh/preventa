@@ -18,6 +18,21 @@ export default function SignupForm() {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
+  // Cache Components keeps this route mounted via React <Activity> instead of
+  // unmounting it, so refs/state survive navigation. Reset the one-shot
+  // navigation latch and stale form state when Next hides the route.
+  useEffect(() => {
+    return () => {
+      navigatedRef.current = false
+      setUsername('')
+      setEmail('')
+      setPassword('')
+      setShowPassword(false)
+      setError(null)
+      setSubmitting(false)
+    }
+  }, [])
+
   // A signed-in user has no reason to create another account.
   useEffect(() => {
     if (!ready || !isAuthenticated || navigatedRef.current) return
