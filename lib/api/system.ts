@@ -6,6 +6,8 @@ interface Device {
   id: number
   device_id: string
   name?: string
+  location?: string
+  activation_state?: 'unclaimed' | 'pending' | 'active'
   status: 'online' | 'offline'
   last_heartbeat: string
 }
@@ -25,6 +27,8 @@ export interface OwnerDevice {
   status: 'online' | 'offline'
   lastHeartbeat: string | null
   residenceId: number | null
+  location?: string
+  activationState?: 'unclaimed' | 'pending' | 'active'
 }
 
 async function loadDevices(): Promise<OwnerDevice[]> {
@@ -33,6 +37,8 @@ async function loadDevices(): Promise<OwnerDevice[]> {
     id: d.id,
     hardwareId: d.device_id,
     name: d.name?.trim() || d.device_id,
+    location: d.location?.trim() || '',
+    activationState: d.activation_state,
     status: d.status,
     lastHeartbeat: d.last_heartbeat ?? null,
     residenceId: (d as { residence_id?: number | null }).residence_id ?? null,

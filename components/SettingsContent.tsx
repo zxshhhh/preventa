@@ -14,15 +14,9 @@ import {
 } from '@/lib/api/settings'
 import { SkeletonBar, SkeletonCircle } from '@/components/ui/Skeleton'
 import { formatFullDate, formatTime } from '@/lib/logReport'
-import { fetchResidences, type ResidenceEntry } from '@/lib/api/profile'
 import {
-  registerDevice,
   deleteDevice,
-  findDeviceByHardwareId,
-  type RegisteredDevice,
-  type OwnerDevice,
 } from '@/lib/api/system'
-import { ApiError } from '@/lib/api/client'
 import {
   enableBrowserPush,
   disableBrowserPush,
@@ -754,358 +748,30 @@ function DeviceReportingSection({
 
 function DeviceManagementSection() {
   const { devices, refresh, loading: devicesLoading } = useDevices()
-  const { pushToast } = useSensors()
   const online = useOnline()
-
-  const [residences, setResidences] = useState<ResidenceEntry[]>([])
-  const [residencesLoading, setResidencesLoading] = useState(false)
-  const [hardwareId, setHardwareId] = useState('')
-  const [residenceChoice, setResidenceChoice] = useState<string>('')
-  const [newAddress, setNewAddress] = useState('')
-  const [registering, setRegistering] = useState(false)
-  const [registered, setRegistered] = useState<RegisteredDevice | null>(null)
-  const [registerNotice, setRegisterNotice] = useState<{
-    level: 'error' | 'info'
-    text: string
-  } | null>(null)
+  const { pushToast } = useSensors()
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
-  const [revealed, setRevealed] = useState(false)
-
-  useEffect(() => {
-    if (!isApiConfigured()) return
-
-    let cancelled = false
-
-    // Deferred so the first render matches the prerendered HTML and setState
-    // never runs synchronously inside the effect body.
-    const id = setTimeout(() => {
-      if (cancelled) return
-      setResidencesLoading(true)
-
-      void fetchResidences()
-        .then((list) => {
-          if (!cancelled) setResidences(list)
-        })
-        .catch(() => {
-          /* the register form still works with a new-residence address */
-        })
-        .finally(() => {
-          if (!cancelled) setResidencesLoading(false)
-        })
-    }, 0)
-
-    return () => {
-      cancelled = true
-      clearTimeout(id)
-    }
-  }, [])
-
-  const canRegister =
-    hardwareId.trim().length > 0 &&
-    (residenceChoice !== 'new' || newAddress.trim().length > 0)
-
-  const submitRegister = async () => {
-    if (!online || !isApiConfigured() || !canRegister || registering) return
-
-    const submittedId = hardwareId.trim()
-
-    setRegistering(true)
-    setRegistered(null)
-    setRegisterNotice(null)
-    setRevealed(false)
-
-    let created: RegisteredDevice | null = null
-    let failure: unknown = null
-
-    try {
-      created = await registerDevice({
-        deviceId: submittedId,
-        residenceId:
-          residenceChoice !== '' && residenceChoice !== 'new'
-            ? Number(residenceChoice)
-            : null,
-        address: residenceChoice === 'new' ? newAddress : null,
-      })
-    } catch (error) {
-      failure = error
-      console.error('Device registration failed:', error)
-    }
-
-    // The backend can commit the device even when the response is unusable (unknown body shape, or the
-    // client timed out after the row was written). Always reconcile against the device list before
-    // reporting a failure — otherwise the device exists but the UI claims otherwise until a reload.
-    // Retry a couple of times after a failure so a slow commit still gets picked up.
-    const attempts = failure ? 3 : 1
-    let landed: OwnerDevice | null = null
-
-    for (let attempt = 0; attempt < attempts && !landed; attempt += 1) {
-      try {
-        landed = await findDeviceByHardwareId(submittedId)
-      } catch {
-        /* list fetch failed — keep trying / fall back to the register outcome below */
-        landed = null
-      }
-
-      if (!landed && attempt < attempts - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 1500))
-      }
-    }
-
-    if (landed) {
-      setRegistered({
-        id: landed.id,
-        hardwareId: landed.hardwareId,
-        name: landed.name,
-        status: landed.status,
-        apiKey: created?.apiKey ?? null,
-      })
-      setHardwareId('')
-      setNewAddress('')
-      refresh()
-
-      if (created?.apiKey) {
-        pushToast(
-          'Device registered',
-          `${landed.name} was added. Copy the setup key now. It is shown only once.`,
-        )
-      } else if (failure) {
-        pushToast(
-          'Already registered',
-          `${landed.hardwareId} is already on this account. The setup key is only returned the first time a board is registered.`,
-          'WARNING',
-        )
-        setRegisterNotice({
-          level: 'info',
-          text: `${landed.hardwareId} was already registered to this account. Nothing was changed. The setup key cannot be shown again.`,
-        })
-      } else {
-        pushToast(
-          'Device registered',
-          `${landed.name} was added, but the API did not return a setup key.`,
-          'WARNING',
-        )
-      }
-
-      setRegistering(false)
-      return
-    }
-
-    const message =
-      failure instanceof Error ? failure.message : String(failure ?? 'Unknown error')
-
-    const status =
-      failure instanceof ApiError && failure.status > 0
-        ? ` (HTTP ${failure.status})`
-        : ''
-
-    pushToast('Registration failed', `${message}${status}`, 'CRITICAL')
-    setRegisterNotice({
-      level: 'error',
-      text: `Registration failed: ${message}${status}`,
-    })
-
-    // Reload the list anyway so the UI can never show stale device data after an attempt.
-    refresh()
-    setRegistering(false)
-  }
+  const ownerSetupUrl = 'https://preventa.duckdns.org/setup/'
 
   const removeDevice = (device: { id: number; name: string }) => {
-    if (!online || !isApiConfigured()) {
+    if (!online || !isApiConfigured()) { setConfirmDeleteId(null); return }
+    void deleteDevice(device.id).then(() => {
       setConfirmDeleteId(null)
-      return
-    }
-
-    void deleteDevice(device.id)
-      .then(() => {
-        setConfirmDeleteId(null)
-        setRegisterNotice(null)
-
-        if (registered?.id === device.id) {
-          setRegistered(null)
-        }
-
-        refresh()
-        pushToast(
-          'Device removed',
-          `${device.name} and its readings were deleted.`,
-        )
-      })
-      .catch(() =>
-        pushToast(
-          'Delete failed',
-          'Could not reach the API. The device was kept.',
-          'CRITICAL',
-        ),
-      )
+      refresh()
+      pushToast('Device removed', `${device.name} and its readings were deleted.`)
+    }).catch(() => pushToast('Delete failed', 'Could not reach the API — device kept.', 'CRITICAL'))
   }
 
   return (
     <section className="panel-card p-5">
-      <h2 className="font-bold text-base text-gray-100 tracking-wide">
-        Device Management
-      </h2>
-
-      <p className="text-xs text-gray-500 mt-0.5">
-        Register a board to this account or remove a device. Removal deletes its
-        readings, events, baselines and captures.
-      </p>
-
-      {/* Register form */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
-        <div className="rounded-xl border border-white/10 p-3 flex flex-col gap-2">
-          <p className="text-xs font-bold text-gray-100">
-            Hardware device ID
-          </p>
-
-          <input
-            value={hardwareId}
-            onChange={(e) => setHardwareId(e.target.value)}
-            placeholder="e.g. PREVENTA-001"
-            aria-label="Hardware device ID"
-            className="input-profile w-full"
-          />
-        </div>
-
-        <div className="rounded-xl border border-white/10 p-3 flex flex-col gap-2">
-          <p className="text-xs font-bold text-gray-100">
-            Residence
-          </p>
-
-          {residencesLoading ? (
-            <div role="status" className="h-10">
-              <span className="sr-only">Loading residences…</span>
-              <SkeletonBar className="h-10 w-full rounded-lg" />
-            </div>
-          ) : (
-            <select
-              value={residenceChoice}
-              onChange={(e) => setResidenceChoice(e.target.value)}
-              aria-label="Residence"
-              className="input-profile w-full"
-            >
-              <option value="">No residence selected</option>
-
-              {residences.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.address || `Residence ${r.id}`}
-                </option>
-              ))}
-
-              <option value="new">+ New residence…</option>
-            </select>
-          )}
-        </div>
-
-        <div className="rounded-xl border border-white/10 p-3 flex flex-col gap-2">
-          <p className="text-xs font-bold text-gray-100">
-            New residence address
-          </p>
-
-          <input
-            value={newAddress}
-            onChange={(e) => setNewAddress(e.target.value)}
-            placeholder={
-              residenceChoice === 'new'
-                ? 'Street, city'
-                : 'Only used with “+ New residence…”'
-            }
-            aria-label="New residence address"
-            disabled={residenceChoice !== 'new'}
-            className="input-profile w-full disabled:opacity-40"
-          />
-        </div>
+      <h2 className="font-bold text-base text-gray-100 tracking-wide">Device Management</h2>
+      <p className="text-xs text-gray-500 mt-0.5">Activate a physical device using its QR card and pairing code. Set its room so alerts identify where the risk was detected.</p>
+      <div className="mt-4 rounded-xl border border-white/10 p-4">
+        <a href={ownerSetupUrl} target="_blank" rel="noopener noreferrer" className="btn-primary btn-md inline-flex">ACTIVATE DEVICE / EDIT LOCATION</a>
+        <p className="text-xs text-gray-400 mt-3">Sign in on the secure setup page with the same PREVENTA username and password. Return here and refresh after activation. Device API keys stay on the hardware.</p>
+        <button type="button" onClick={() => refresh()} className="btn-outline btn-sm mt-3">REFRESH DEVICES</button>
       </div>
-
-      <div className="flex flex-wrap items-center gap-2 mt-3">
-        <button
-          type="button"
-          onClick={() => void submitRegister()}
-          disabled={!canRegister || registering || !online}
-          title={online ? undefined : 'Reconnect to register a device'}
-          className="btn-primary btn-md min-w-32 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {registering ? 'REGISTERING…' : 'REGISTER DEVICE'}
-        </button>
-
-        {!canRegister && (
-          <span className="text-xs text-gray-500">
-            Enter a hardware ID
-            {residenceChoice === 'new' ? ' and an address' : ''}.
-          </span>
-        )}
-      </div>
-
-      {/* Persistent outcome — toasts auto-dismiss, so registration feedback also stays on screen */}
-      {registerNotice && (
-        <p
-          role={registerNotice.level === 'error' ? 'alert' : 'status'}
-          className={
-            'mt-3 rounded-xl border px-3 py-2 text-xs leading-relaxed ' +
-            (registerNotice.level === 'error'
-              ? 'border-(--red-indicator)/30 bg-(--red-indicator)/10 text-(--red-indicator)'
-              : 'border-amber-400/25 bg-amber-400/10 text-amber-300')
-          }
-        >
-          {registerNotice.text}
-        </p>
-      )}
-
-      {registered && !registered.apiKey && (
-        <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3">
-          <p className="text-xs font-extrabold tracking-wide text-gray-300">
-            SETUP KEY NOT RETURNED
-          </p>
-
-          <p className="text-xs text-gray-400 mt-1 leading-relaxed">
-            The device is on your account, but the API did not provide a setup
-            key. Remove the device and register it again if the board still
-            needs one.
-          </p>
-        </div>
-      )}
-
-      {/* One-time api_key reveal */}
-      {registered?.apiKey && (
-        <div className="mt-4 rounded-xl border border-amber-400/25 bg-amber-400/10 p-3">
-          <p className="text-xs font-extrabold tracking-wide text-amber-300">
-            SETUP KEY: SHOWN ONCE
-          </p>
-
-          <p className="text-xs text-gray-300 mt-1 leading-relaxed">
-            Copy it now and enter it on the board&apos;s setup portal. It is
-            never stored in client caches or logs.
-          </p>
-
-          <div className="flex items-center gap-2 mt-2 flex-wrap">
-            <code className="flex-1 min-w-0 truncate rounded-lg bg-black/30 px-3 py-2 text-xs tnum text-gray-100">
-              {revealed
-                ? registered.apiKey
-                : '•'.repeat(
-                    Math.min(24, Math.max(8, registered.apiKey.length)),
-                  )}
-            </code>
-
-            <button
-              type="button"
-              onClick={() => setRevealed((r) => !r)}
-              className="btn-outline btn-sm"
-            >
-              {revealed ? 'HIDE' : 'REVEAL'}
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                void navigator.clipboard?.writeText(registered.apiKey ?? '')
-              }
-              className="btn-ghost btn-sm"
-            >
-              COPY
-            </button>
-          </div>
-        </div>
-      )}
-
+      <p className="text-xs text-gray-500 mt-4">Removing a device deletes its readings, events, baselines and captures.</p>
       {/* Registered devices with removal */}
       <div className="mt-4 flex flex-col gap-2">
         {devicesLoading && devices.length === 0 ? (
@@ -1156,6 +822,9 @@ function DeviceManagementSection() {
 
                 <p className="text-xs text-gray-500 tnum truncate">
                   {d.hardwareId}
+                </p>
+                <p className="text-xs text-gray-400 truncate">
+                  {d.location || 'Location not set'}{d.activationState === 'pending' ? ' · Waiting for activation' : ''}
                 </p>
               </div>
 
