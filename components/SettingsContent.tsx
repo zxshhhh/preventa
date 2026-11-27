@@ -13,6 +13,7 @@ import {
   type DeviceSyncStatus,
 } from '@/lib/api/settings'
 import { SkeletonBar, SkeletonCircle } from '@/components/ui/Skeleton'
+import CurrentDeviceSelector from '@/components/ui/CurrentDeviceSelector'
 import { formatFullDate, formatTime } from '@/lib/logReport'
 import {
   deleteDevice,
@@ -146,6 +147,9 @@ export default function SettingsContent() {
   const hydrated = useHydrated()
   const online = useOnline()
   const { pushToast } = useSensors()
+  const { selected, isAllDevices } = useDevices()
+  // The aggregate view is read-only here: a PATCH needs one concrete board.
+  const targetDeviceId = isAllDevices ? null : selected?.id ?? null
 
   const [intervalInput, setIntervalInput] = useState<string>('')
   const [cameraEnabled, setCameraEnabled] = useState<boolean | null>(null)
@@ -179,14 +183,23 @@ export default function SettingsContent() {
     }
 
     const id = setTimeout(() => {
-      if (!isApiConfigured()) return
+      // Switching boards must never show the previous board's values.
+      setIntervalInput('')
+      setCameraEnabled(null)
+      setRemoteBaseline({ interval: '', camera: null })
+      setSync(null)
+
+      if (targetDeviceId === null || !isApiConfigured()) {
+        setSettingsLoading(false)
+        return
+      }
 
       // A cached hit resolves synchronously — seed it without a shimmer flash.
-      const cached = peekCache<DeviceRemoteState>('device-settings')
+      const cached = peekCache<DeviceRemoteState>(`device-settings:${targetDeviceId}`)
       if (cached) applyRemote(cached)
       else setSettingsLoading(true)
 
-      void fetchDeviceSettings()
+      void fetchDeviceSettings({ deviceId: targetDeviceId })
         .then((remote) => {
           if (remote) applyRemote(remote)
         })
@@ -202,16 +215,16 @@ export default function SettingsContent() {
       cancelled = true
       clearTimeout(id)
     }
-  }, [hydrated])
+  }, [hydrated, targetDeviceId])
 
   // While a save is pending, poll the device detail until the board syncs.
   // Polling only runs while the Settings screen is open.
   useEffect(() => {
-    if (sync?.pending !== true || !isApiConfigured()) return
+    if (targetDeviceId === null || sync?.pending !== true || !isApiConfigured()) return
 
     const id = setInterval(() => {
       // Poll must observe the board's real sync state, not the cached snapshot.
-      void fetchDeviceSettings({ fresh: true })
+      void fetchDeviceSettings({ fresh: true, deviceId: targetDeviceId })
         .then((remote) => {
           if (remote) setSync(remote.sync)
         })
@@ -221,7 +234,7 @@ export default function SettingsContent() {
     }, 10_000)
 
     return () => clearInterval(id)
-  }, [sync?.pending])
+  }, [sync?.pending, targetDeviceId])
 
   const deviceIntervalValid =
     intervalInput.trim() === '' ||
@@ -234,6 +247,10 @@ export default function SettingsContent() {
     cameraEnabled !== remoteBaseline.camera
 
   const saveDevice = () => {
+    if (targetDeviceId === null) {
+      pushToast('Select a hardware device', 'Choose a board above before changing its settings.', 'WARNING')
+      return
+    }
     if (!online) {
       pushToast('Unavailable offline', 'Reconnect to send device settings.', 'WARNING')
       return
@@ -265,7 +282,7 @@ export default function SettingsContent() {
       payload.cameraEnabled = cameraEnabled
     }
 
-    void saveDeviceSettings(payload)
+    void saveDeviceSettings(payload, targetDeviceId)
       .then((remote) => {
         if (remote) {
           setSync(remote.sync)
@@ -297,9 +314,9 @@ export default function SettingsContent() {
   }
 
   const refreshSync = () => {
-    if (!online || !isApiConfigured()) return
+    if (targetDeviceId === null || !online || !isApiConfigured()) return
 
-    void fetchDeviceSettings({ fresh: true })
+    void fetchDeviceSettings({ fresh: true, deviceId: targetDeviceId })
       .then((remote) => {
         if (remote) setSync(remote.sync)
       })
@@ -312,6 +329,7 @@ export default function SettingsContent() {
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="font-bold text-2xl text-gray-100">Settings</h1>
+        <CurrentDeviceSelector className="mt-3" />
       </div>
 
       <AppearanceSection />
@@ -319,6 +337,8 @@ export default function SettingsContent() {
       <AccessibilitySection />
 
       <DeviceReportingSection
+        deviceName={selected?.name || selected?.hardwareId || null}
+        noDevice={targetDeviceId === null}
         intervalInput={intervalInput}
         cameraEnabled={cameraEnabled}
         dirty={deviceDirty}
@@ -486,11 +506,13 @@ function SyncBanner({
   sync,
   offline,
   loading,
+  disabled = false,
   onRefresh,
 }: {
   sync: DeviceSyncStatus | null
   offline: boolean
   loading: boolean
+  disabled?: boolean
   onRefresh: () => void
 }) {
   if (loading) {
@@ -565,8 +587,8 @@ function SyncBanner({
       <button
         type="button"
         onClick={onRefresh}
-        disabled={offline}
-        title={offline ? 'Reconnect to refresh device status' : undefined}
+        disabled={offline || disabled}
+        title={offline ? 'Reconnect to refresh device status' : disabled ? 'Select a hardware device first' : undefined}
         className="btn-ghost btn-sm shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
       >
         REFRESH STATUS
@@ -576,6 +598,8 @@ function SyncBanner({
 }
 
 function DeviceReportingSection({
+  deviceName,
+  noDevice,
   intervalInput,
   cameraEnabled,
   dirty,
@@ -588,6 +612,8 @@ function DeviceReportingSection({
   onSave,
   onRefresh,
 }: {
+  deviceName: string | null
+  noDevice: boolean
   intervalInput: string
   cameraEnabled: boolean | null
   dirty: boolean
@@ -609,15 +635,23 @@ function DeviceReportingSection({
       </h2>
 
       <p className="text-xs text-gray-500 mt-0.5">
+        {deviceName ? `Current device: ${deviceName}. ` : ''}
         Reporting settings sync from the cloud to the board. Device application
         does not confirm SMS receipt.
       </p>
+
+      {noDevice && (
+        <p role="status" className="mt-3 text-xs font-semibold text-(--amber-indicator)">
+          Select a specific hardware device above to view and change its reporting settings.
+        </p>
+      )}
 
       <div className="mt-4">
         <SyncBanner
           sync={sync}
           offline={offline}
           loading={loading}
+          disabled={noDevice}
           onRefresh={onRefresh}
         />
       </div>
@@ -647,7 +681,7 @@ function DeviceReportingSection({
                 placeholder="firmware default"
                 value={intervalInput}
                 onChange={(e) => onIntervalChange(e.target.value)}
-                readOnly={offline}
+                readOnly={offline || noDevice}
                 aria-label="Cloud reporting interval in seconds"
                 aria-invalid={!valid}
                 aria-describedby="reporting-interval-help"
@@ -696,7 +730,7 @@ function DeviceReportingSection({
               aria-checked={cameraOn}
               aria-label="Camera enabled"
               onClick={() => onCameraChange(!cameraOn)}
-              disabled={offline}
+              disabled={offline || noDevice}
               className={
                 'relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-(--focus-ring) focus-visible:ring-offset-2 focus-visible:ring-offset-(--bg-color) ' +
                 (cameraOn
@@ -719,13 +753,15 @@ function DeviceReportingSection({
         <button
           type="button"
           onClick={onSave}
-          disabled={loading || !valid || !dirty || offline}
+          disabled={loading || !valid || !dirty || offline || noDevice}
           title={
-            offline
-              ? 'Reconnect to make changes'
-              : loading
-                ? 'Waiting for device settings'
-                : undefined
+            noDevice
+              ? 'Select a hardware device first'
+              : offline
+                ? 'Reconnect to make changes'
+                : loading
+                  ? 'Waiting for device settings'
+                  : undefined
           }
           className="btn-primary btn-md min-w-32 disabled:opacity-40 disabled:cursor-not-allowed"
         >

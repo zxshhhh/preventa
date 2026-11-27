@@ -52,6 +52,8 @@ interface FetchWindowOptions {
   pageSize?: number
   concurrency?: number
   maxPages?: number
+  /** Filter readings by the backend's numeric device id, after fetching. */
+  deviceId?: number
   /** Freshly fetched readings only (first page, then each batch's delta). */
   onItems?: (items: ReadingItem[]) => void
 }
@@ -123,7 +125,7 @@ function normalizeReadings(
     if (window && (t < window.start || (exclusiveEnd ? t >= window.end : t > window.end))) continue
     for (const [id, value] of readingsOf(r)) {
       if (typeof value !== 'number' || !Number.isFinite(value)) continue
-      buckets[id].push({ t, value, label: formatRangeLabel(t, range) })
+      buckets[id].push({ t, value, label: formatRangeLabel(t, range), device: r.device })
     }
   }
 
@@ -223,8 +225,11 @@ function throwIfAborted(signal?: AbortSignal) {
 
 function notifyItems(options: FetchWindowOptions, items: ReadingItem[]) {
   if (!options.onItems) return
+  // Filtering happens here so progress snapshots and the final snapshot contain
+  // only the selected device's readings — no device query param is assumed.
+  const matching = typeof options.deviceId === 'number' ? items.filter((i) => i.device === options.deviceId) : items
   try {
-    options.onItems(items)
+    options.onItems(matching)
   } catch {
     /* progress reporting must never break the underlying fetch */
   }
@@ -262,7 +267,9 @@ async function fetchReadingsWindow(
   const first = await getReadings(`${ENDPOINTS.readings}?${params.toString()}`, options)
   if (!first) return { complete: false }
   const firstResults = first.results ?? []
-  if (!firstResults.length) return { complete: true }
+  // With a device filter the first page may hold no matching readings; the
+  // remaining pages still have to be scanned before the window is complete.
+  if (!firstResults.length && typeof options.deviceId !== 'number') return { complete: true }
 
   const pageSize = firstResults.length
   const totalPages = Math.max(1, Math.ceil((first.count ?? pageSize) / pageSize))
@@ -323,6 +330,7 @@ function defaultFetchOptions(options: FetchRangeOptions, limit = REQUEST_BUDGET,
     concurrency: options.concurrency ?? RANGE_CONCURRENCY,
     timeout: options.timeout ?? RANGE_TIMEOUT_MS,
     maxPages: options.maxPages ?? maxPages,
+    deviceId: options.deviceId,
   }
 }
 
@@ -429,8 +437,11 @@ async function rollForward(
 }
 
 export async function fetchLatestSeries(options: FetchWindowOptions = {}): Promise<SensorSeries[]> {
-  const data = await getReadings(ENDPOINTS.readings, options)
-  return normalizeReadings(data?.results ?? [], '1H')
+  const params = new URLSearchParams({ page_size: String(options.pageSize ?? DEFAULT_PAGE_SIZE) })
+  const data = await getReadings(`${ENDPOINTS.readings}?${params.toString()}`, options)
+  const results = data?.results ?? []
+  const matching = typeof options.deviceId === 'number' ? results.filter((r) => r.device === options.deviceId) : results
+  return normalizeReadings(matching, '1H')
 }
 
 function isRangeSnapshot(value: unknown): value is RangeSnapshot {
@@ -489,7 +500,9 @@ function compactSnapshot(snapshot: unknown, range: TrendRange): RangeSnapshot {
 }
 
 export function fetchRangeRaw(range: TrendRange, options: FetchRangeOptions = {}): Promise<RangeSnapshot> {
-  const key = `range:${range}`
+  // One history snapshot per device: hourly compaction must never average
+  // readings from different boards together.
+  const key = `range:${range}:device:${options.deviceId ?? 'all'}`
 
   // The 60 s poll is a no-op until local midnight has actually passed.
   if (isHistoryRange(range) && !options.fresh) {

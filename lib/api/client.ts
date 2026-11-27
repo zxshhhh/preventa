@@ -14,6 +14,7 @@ export const AUTH_EXPIRED_EVENT = 'preventa:auth-expired'
 export function clearSessionLocalData(): void {
   if (typeof window === 'undefined') return
   try {
+    localStorage.removeItem('preventa.live-snapshot.v2')
     localStorage.removeItem('preventa.live-snapshot.v1')
     localStorage.removeItem('preventa.notifications.v3')
   } catch {

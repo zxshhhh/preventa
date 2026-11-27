@@ -8,6 +8,7 @@ import { CACHE_TAGS, CACHE_TTL } from '@/lib/api/cache'
 import { useCachedQuery } from '@/lib/api/useCachedQuery'
 import { fetchRangeRaw, isHistoryRange, type RangeSnapshot } from '@/lib/api/telemetry'
 import { useSensors } from '@/context/useSensors'
+import { useDevices } from '@/context/useDevice'
 import DashboardHeader from '@/components/DashboardHeader'
 import RecentReportLog from '@/components/RecentReportLog'
 import DashboardSensorCards from '@/components/DashboardSensorCards'
@@ -18,7 +19,15 @@ const WINDOW_STEP_MS = 30_000
 const quantizeWindowEnd = (ts: number) => Math.floor(ts / WINDOW_STEP_MS) * WINDOW_STEP_MS
 
 export default function DashboardContent() {
-  const { series, liveSavedAt, liveSeeding, liveReady } = useSensors()
+  const { series, seriesByDevice, liveSavedAt, liveSavedAtByDevice, liveSeeding, liveReady } = useSensors()
+  const { selected, isAllDevices } = useDevices()
+  // `null` is the aggregate view; a concrete board narrows every tab and card.
+  const activeDeviceId = isAllDevices || !selected ? null : selected.id
+  const activeSeries = useMemo(
+    () => (activeDeviceId === null ? series : seriesByDevice[activeDeviceId] ?? []),
+    [activeDeviceId, series, seriesByDevice],
+  )
+  const activeSavedAt = activeDeviceId === null ? liveSavedAt : liveSavedAtByDevice[activeDeviceId] ?? null
   const [range, setRange] = useState<TrendRange>('1H')
   const [now, setNow] = useState(0)
 
@@ -40,9 +49,10 @@ export default function DashboardContent() {
 
   // Historical ranges come from the in-memory API cache. The 60 s poll is a
   // no-op for 7D/30D until local midnight has passed (fetchRangeRaw handles it).
+  const rangeCacheKey = `range:${range}:device:${activeDeviceId ?? 'all'}`
   const { data: remoteSnapshot, progress: rangeProgress, savedAt: savedRangeAt } = useCachedQuery<RangeSnapshot>(
-    range === '1H' ? null : `range:${range}`,
-    (fresh) => fetchRangeRaw(range, { fresh }),
+    range === '1H' ? null : rangeCacheKey,
+    (fresh) => fetchRangeRaw(range, { fresh, deviceId: activeDeviceId ?? undefined }),
     {
       ...CACHE_TTL.ranges,
       tags: [CACHE_TAGS.ranges],
@@ -54,8 +64,8 @@ export default function DashboardContent() {
   // LIVE is a fixed 1-hour window over the real-time WS buffer. Missing buckets
   // are explicit gaps (no carry-fill/stretching).
   const liveChart = useMemo(
-    () => series.map((s) => ({ id: s.id, points: bucketWindow(s.points, '1H', liveWindow, { pending: liveSeeding }) })),
-    [series, liveWindow, liveSeeding],
+    () => activeSeries.map((s) => ({ id: s.id, points: bucketWindow(s.points, '1H', liveWindow, { pending: liveSeeding }) })),
+    [activeSeries, liveWindow, liveSeeding],
   )
 
   // 7D/30D are complete calendar days, so their window comes from the saved
@@ -83,7 +93,7 @@ export default function DashboardContent() {
     if (!base || !displayWindow) return []
     const pending = rangeProgress !== null
     return base.series.map((s) => {
-      const live = series.find((l) => l.id === s.id)?.points ?? []
+      const live = activeSeries.find((l) => l.id === s.id)?.points ?? []
       const merged = [...s.points, ...live].filter(
         (p) => typeof p.t === 'number' && p.t >= displayWindow.start && p.t <= displayWindow.end,
       )
@@ -95,14 +105,14 @@ export default function DashboardContent() {
         points: bucketWindow(merged, range, displayWindow, { pending }),
       }
     })
-  }, [rangeProgress, remoteSnapshot, range, series, liveChart, displayWindow])
+  }, [rangeProgress, remoteSnapshot, range, activeSeries, liveChart, displayWindow])
 
   const chartWindow: RangeWindow | null = displayWindow
   // LIVE resolves once its one-time seed has settled, even if it found nothing —
   // an empty buffer is "no data", never an endless loading state.
   const chartResolved = range === '1H' ? liveReady && !liveSeeding : remoteSnapshot !== null
   const chartEmpty = range === '1H'
-    ? chartResolved && series.every((s) => !hasRealData(s.points))
+    ? chartResolved && activeSeries.every((s) => !hasRealData(s.points))
     : chartSeries.length > 0 && chartSeries.every((s) => !hasRealData(s.points))
   const initialLoadPending = chartSeries.length === 0 && (range !== '1H' || !liveReady)
 
@@ -116,7 +126,7 @@ export default function DashboardContent() {
         onRangeChange={setRange}
         cachedAt={
           range === '1H'
-            ? liveSavedAt
+            ? activeSavedAt
             : isHistoryRange(range)
               ? (remoteSnapshot?.range === range ? remoteSnapshot.coverageEnd ?? savedRangeAt : savedRangeAt)
               : savedRangeAt

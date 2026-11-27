@@ -22,6 +22,8 @@ export interface SeriesPoint {
   label: string
   value: number | null
   t?: number
+  /** Numeric hardware device id from the backend reading (absent on chart buckets). */
+  device?: number
   /** True when this bucket had no device reading in the selected window. */
   gap?: boolean
   /** True when this bucket is unresolved because range pages are still loading. */

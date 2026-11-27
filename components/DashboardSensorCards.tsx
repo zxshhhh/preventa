@@ -2,6 +2,7 @@
 import { useOnline, formatSavedAt } from '@/lib/useOnline'
 import { isApiConfigured } from '@/lib/api/config'
 import { useSensors } from '@/context/useSensors'
+import { useDevices } from '@/context/useDevice'
 import DashboardMetricCard from './ui/DashboardMetricCard'
 import ChartHoverOverlay from './ui/ChartHoverOverlay'
 import { ChartHoverProvider, useChartHoverApi } from './ui/ChartHoverProvider'
@@ -73,12 +74,12 @@ interface CardData {
   lastReadingLabel?: string
 }
 
-/** Range switches invalidate the hovered bucket — drop the selection. */
-function ClearHoverOnRangeChange({ range }: { range: TrendRange }) {
+/** Range/device switches invalidate the hovered bucket — drop the selection. */
+function ClearHoverOnRangeChange({ viewKey }: { viewKey: string }) {
   const { setHover } = useChartHoverApi()
   useEffect(() => {
     setHover(null)
-  }, [range, setHover])
+  }, [viewKey, setHover])
   return null
 }
 
@@ -108,7 +109,10 @@ export default function DashboardSensorCards({
   loading = false,
 }: Props) {
   const online = useOnline()
-  const { liveStatus, lastWsReadingAt } = useSensors()
+  const { selected, isAllDevices } = useDevices()
+  const { liveStatus, lastWsReadingAt: allLastReadingAt, lastReadingAtByDevice } = useSensors()
+  const activeDeviceId = isAllDevices || !selected ? null : selected.id
+  const lastWsReadingAt = activeDeviceId === null ? allLastReadingAt : lastReadingAtByDevice[activeDeviceId] ?? null
   // The caller knows when the window has resolved: an empty LIVE buffer is a
   // real "no data" result, not an endless loading state.
   const chartLoading = online && isApiConfigured() && loading
@@ -187,7 +191,7 @@ export default function DashboardSensorCards({
 
   return (
     <ChartHoverProvider>
-      <ClearHoverOnRangeChange range={range} />
+      <ClearHoverOnRangeChange viewKey={`${range}:${activeDeviceId ?? 'all'}`} />
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>

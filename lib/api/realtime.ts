@@ -38,24 +38,24 @@ export interface SensorPoint {
   humidity: SeriesPoint
 }
 
-function toPoint(iso: string, value: number): SeriesPoint {
+function toPoint(iso: string, value: number, device: number): SeriesPoint {
   const t = new Date(iso).getTime()
-  if (!Number.isFinite(t)) return { label: '', value }
-  return { t, value, label: formatRangeLabel(t, '1H')}
+  if (!Number.isFinite(t)) return { label: '', value, device }
+  return { t, value, label: formatRangeLabel(t, '1H'), device }
 }
 
 function mapPayload(payload: LiveReadingPayload): SensorPoint {
   return {
-    mq7: toPoint(payload.timestamp, payload.smooth_ppm),
-    dht22: toPoint(payload.timestamp, payload.smooth_temperature),
-    acs712: toPoint(payload.timestamp, payload.smooth_current),
-    humidity: toPoint(payload.timestamp, payload.smooth_humidity),
+    mq7: toPoint(payload.timestamp, payload.smooth_ppm, payload.device),
+    dht22: toPoint(payload.timestamp, payload.smooth_temperature, payload.device),
+    acs712: toPoint(payload.timestamp, payload.smooth_current, payload.device),
+    humidity: toPoint(payload.timestamp, payload.smooth_humidity, payload.device),
   }
 }
 
 export function connectLiveTelemetry(
   token: string,
-  onReading: (points: SensorPoint, fusion: FusionData) => void,
+  onReading: (device: number, points: SensorPoint, fusion: FusionData) => void,
   onClose?: (code: number) => void,
   onOpen?: () => void
 ): WebSocket {
@@ -78,7 +78,7 @@ export function connectLiveTelemetry(
           camActive: p.cam_active,
           camConfidence: p.cam_confidence,
         }
-        onReading(points, fusion)
+        onReading(p.device, points, fusion)
       }
     } catch {
       /* ignore malformed messages */

@@ -83,8 +83,18 @@ async function setCachedDeviceId(id: number): Promise<void> {
   }
 }
 
-/** Resolves the selected device (cached id first, else the first device from the list). */
-export async function fetchDeviceDetail(): Promise<DeviceConfig | null> {
+/**
+ * Resolves a device by its numeric id. Callers pass the shared current-device
+ * selection; the cached id / first device remain a fallback for legacy callers.
+ */
+export async function fetchDeviceDetail(deviceId?: number | null): Promise<DeviceConfig | null> {
+  if (typeof deviceId === 'number') {
+    try {
+      return await apiGet<DeviceConfig>(ENDPOINTS.updateDevice(deviceId).replace('/update/', ''))
+    } catch {
+      return null
+    }
+  }
   const cached = await getCachedDeviceId()
   if (cached) {
     try {
@@ -125,11 +135,11 @@ function toRemoteState(device: DeviceConfig): DeviceRemoteState {
 }
 
 /** `fresh: true` bypasses the cache for device-sync polling and manual refresh. */
-export function fetchDeviceSettings(options?: { fresh?: boolean }): Promise<DeviceRemoteState | null> {
+export function fetchDeviceSettings(options?: { fresh?: boolean; deviceId?: number | null }): Promise<DeviceRemoteState | null> {
   return cachedFetch(
-    'device-settings',
+    `device-settings:${options?.deviceId ?? 'default'}`,
     async () => {
-      const device = await fetchDeviceDetail()
+      const device = await fetchDeviceDetail(options?.deviceId)
       return device ? toRemoteState(device) : null
     },
     {
@@ -141,9 +151,13 @@ export function fetchDeviceSettings(options?: { fresh?: boolean }): Promise<Devi
   )
 }
 
-export async function saveDeviceSettings(save: DeviceSettingsSave): Promise<DeviceRemoteState | null> {
-  const device = await fetchDeviceDetail()
+export async function saveDeviceSettings(
+  save: DeviceSettingsSave,
+  deviceId?: number | null,
+): Promise<DeviceRemoteState | null> {
+  const device = await fetchDeviceDetail(deviceId)
   if (!device) return null
+  if (typeof deviceId === 'number') await setCachedDeviceId(device.id)
 
   const body: Record<string, unknown> = {}
   if (save.calibration) {

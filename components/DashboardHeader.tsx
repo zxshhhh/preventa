@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useHydrated } from '@/lib/useHydrated'
+import CurrentDeviceSelector from '@/components/ui/CurrentDeviceSelector'
 
 export default function DashboardHeader() {
   const hydrated = useHydrated()
@@ -31,6 +32,7 @@ export default function DashboardHeader() {
           <p className="tnum">{timeStr}</p>
         </div>
       )}
+      <CurrentDeviceSelector allowAll className="mt-3" />
     </div>
   )
 }

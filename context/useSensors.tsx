@@ -35,15 +35,22 @@ export interface SensorToast {
 }
 
 interface SensorsContextType {
+  /** All boards, for the aggregate view. */
   series: SensorSeries[]
+  /** Latest live series for each numeric hardware device id seen on the stream. */
+  seriesByDevice: Record<number, SensorSeries[]>
   /** Fusion fields from the most recent live reading — used to react to tier transitions. */
   lastFusion: FusionData | null
   /** Dashboard-to-backend live socket state; does not imply the device is transmitting. */
   liveStatus: LiveStatus
-  /** Time of the newest reading delivered over the WebSocket (never from REST). */
+  /** Time of the newest reading delivered over the WebSocket (all boards). */
   lastWsReadingAt: number | null
+  /** Newest WS reading time per hardware device id. */
+  lastReadingAtByDevice: Record<number, number>
   /** Timestamp of the newest reading currently shown (live or restored from disk). */
   liveSavedAt: number | null
+  /** Saved-at timestamps per hardware device id. */
+  liveSavedAtByDevice: Record<number, number>
   /** True while the one-time 1H seed is still delivering paged readings. */
   liveSeeding: boolean
   /** True once the one-time 1H seed has settled (with or without readings). */
@@ -59,12 +66,16 @@ interface SensorsContextType {
 
 // Bumped to drop legacy polled /events/ history — modal notifications are push-sourced.
 const STORAGE_KEY = 'preventa.notifications.v3'
-const LIVE_SNAPSHOT_KEY = 'preventa.live-snapshot.v1'
+const LIVE_SNAPSHOT_KEY = 'preventa.live-snapshot.v2'
+const LEGACY_LIVE_SNAPSHOT_KEY = 'preventa.live-snapshot.v1'
 const LIVE_SNAPSHOT_WRITE_MS = 5000
 const MAX_EVENTS = 50
 const MAX_TOASTS = 3
 const TOAST_LIFETIME_MS = 6000
 const BACKFILL_POLL_MS = 30_000
+const SENSOR_IDS: SensorId[] = ['mq7', 'dht22', 'acs712', 'humidity']
+const MAX_BUFFER = 2000
+const MAX_DEVICES = 32
 
 interface LiveSnapshot {
   savedAt: number
@@ -72,19 +83,75 @@ interface LiveSnapshot {
   points: Array<{ id: SensorId; point: SeriesPoint }>
 }
 
+interface SavedLiveSnapshots {
+  all: LiveSnapshot | null
+  devices: Record<number, LiveSnapshot>
+}
+
+type SensorBuffers = Record<SensorId, SeriesPoint[]>
+interface LiveBuffers {
+  all: SensorBuffers
+  devices: Map<number, SensorBuffers>
+}
+
 const SensorsContext = createContext<SensorsContextType | undefined>(undefined)
 
-function loadLiveSnapshot(): LiveSnapshot | null {
-  if (typeof window === 'undefined') return null
+function emptyBuffers(): SensorBuffers {
+  return { mq7: [], dht22: [], acs712: [], humidity: [] }
+}
+
+function deviceBuffers(buffers: LiveBuffers, device: number): SensorBuffers {
+  let buf = buffers.devices.get(device)
+  if (!buf) {
+    buf = emptyBuffers()
+    // Bound memory if an unexpected stream sends readings for many boards.
+    if (buffers.devices.size >= MAX_DEVICES) {
+      const oldest = buffers.devices.keys().next().value
+      if (typeof oldest === 'number') buffers.devices.delete(oldest)
+    }
+    buffers.devices.set(device, buf)
+  }
+  return buf
+}
+
+function appendPoint(buf: SensorBuffers, id: SensorId, point: SeriesPoint) {
+  const list = buf[id]
+  list.push(point)
+  if (list.length > MAX_BUFFER) list.shift()
+}
+
+function snapshotIsValid(value: unknown): value is LiveSnapshot {
+  const s = value as LiveSnapshot | null
+  return Boolean(s && Array.isArray(s.points) && Number.isFinite(s.savedAt))
+}
+
+function loadLiveSnapshots(): SavedLiveSnapshots {
+  const empty: SavedLiveSnapshots = { all: null, devices: {} }
+  if (typeof window === 'undefined') return empty
   try {
     const raw = localStorage.getItem(LIVE_SNAPSHOT_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as LiveSnapshot
-    if (!parsed || !Array.isArray(parsed.points) || !Number.isFinite(parsed.savedAt)) return null
-    return parsed
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<SavedLiveSnapshots>
+      const devices: Record<number, LiveSnapshot> = {}
+      for (const [key, value] of Object.entries(parsed?.devices ?? {})) {
+        const id = Number(key)
+        if (Number.isFinite(id) && snapshotIsValid(value)) devices[id] = value
+      }
+      return {
+        all: snapshotIsValid(parsed?.all) ? parsed.all : null,
+        devices,
+      }
+    }
+    // Legacy single-board snapshot: treat it as the aggregate tail.
+    const legacyRaw = localStorage.getItem(LEGACY_LIVE_SNAPSHOT_KEY)
+    if (legacyRaw) {
+      const parsed = JSON.parse(legacyRaw)
+      if (snapshotIsValid(parsed)) return { all: parsed, devices: {} }
+    }
   } catch {
-    return null
+    /* ignore corrupted storage */
   }
+  return empty
 }
 
 function isOffline(): boolean {
@@ -150,10 +217,13 @@ function tryBrowserNotify(title: string, body: string) {
 
 export function SensorProvider({ children }: { children: ReactNode }) {
   const [series, setSeries] = useState<SensorSeries[]>([])
+  const [seriesByDevice, setSeriesByDevice] = useState<Record<number, SensorSeries[]>>({})
   const [lastFusion, setLastFusion] = useState<FusionData | null>(null)
   const [liveStatus, setLiveStatus] = useState<LiveStatus>('idle')
   const [lastWsReadingAt, setLastWsReadingAt] = useState<number | null>(null)
+  const [lastReadingAtByDevice, setLastReadingAtByDevice] = useState<Record<number, number>>({})
   const [liveSavedAt, setLiveSavedAt] = useState<number | null>(null)
+  const [liveSavedAtByDevice, setLiveSavedAtByDevice] = useState<Record<number, number>>({})
   const [liveSeeding, setLiveSeeding] = useState(false)
   const [liveReady, setLiveReady] = useState(false)
   const [notifications, setNotifications] = useState<SensorEvent[]>(loadStoredEvents)
@@ -164,55 +234,83 @@ export function SensorProvider({ children }: { children: ReactNode }) {
   const wsReconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const wsGenerationRef = useRef(0)
   const reconnectRef = useRef<() => void>(() => {})
-  const lastSnapshotWriteRef = useRef(0)
+  const lastSnapshotWriteRef = useRef<Record<string, number>>({})
   const wasOfflineRef = useRef(false)
   const online = useOnline()
-  const buffersRef = useRef<Record<SensorId, SeriesPoint[]>>({
-    mq7: [],
-    dht22: [],
-    acs712: [],
-    humidity: [],
-  })
+  const buffersRef = useRef<LiveBuffers>({ all: emptyBuffers(), devices: new Map() })
+  const savedSnapshotsRef = useRef<SavedLiveSnapshots>({ all: null, devices: {} })
+  const fusionRestoredRef = useRef(false)
 
-  const MAX_BUFFER = 2000
-
-  function pushPoint(id: SensorId, point: SeriesPoint) {
-    const buf = buffersRef.current[id]
-    if (!buf) return
-    buf.push(point)
-    if (buf.length > MAX_BUFFER) buf.shift()
-  }
-
-  function rebuildSeries() {
-    const out: SensorSeries[] = []
-    for (const id of Object.keys(buffersRef.current) as SensorId[]) {
-      out.push({ id, points: [...buffersRef.current[id]] })
+  const pushReading = useCallback((device: number, points: SensorPoint) => {
+    const buffers = buffersRef.current
+    const perDevice = deviceBuffers(buffers, device)
+    for (const id of SENSOR_IDS) {
+      appendPoint(buffers.all, id, points[id])
+      appendPoint(perDevice, id, points[id])
     }
-    setSeries(out)
-  }
+  }, [])
+
+  const rebuildSeries = useCallback(() => {
+    const buffers = buffersRef.current
+    setSeries(SENSOR_IDS.map((id) => ({ id, points: [...buffers.all[id]] })))
+    const byDevice: Record<number, SensorSeries[]> = {}
+    for (const [device, buf] of buffers.devices) {
+      byDevice[device] = SENSOR_IDS.map((id) => ({ id, points: [...buf[id]] }))
+    }
+    setSeriesByDevice(byDevice)
+  }, [])
 
   /** Small, newest-reading snapshot that keeps the LIVE cards meaningful offline. */
-  function saveLiveSnapshot(points: SensorPoint, fusion: FusionData) {
+  function saveLiveSnapshot(device: number | null, points: SensorPoint, fusion: FusionData) {
     const now = Date.now()
-    if (now - lastSnapshotWriteRef.current < LIVE_SNAPSHOT_WRITE_MS) return
-    lastSnapshotWriteRef.current = now
-
     let savedAt = 0
-    for (const id of ['mq7', 'dht22', 'acs712', 'humidity'] as SensorId[]) {
+    for (const id of SENSOR_IDS) {
       const t = points[id].t
       if (typeof t === 'number' && t > savedAt) savedAt = t
     }
     const snapshot: LiveSnapshot = {
       savedAt: savedAt || now,
       fusion,
-      points: (['mq7', 'dht22', 'acs712', 'humidity'] as SensorId[]).map((id) => ({ id, point: points[id] })),
+      points: SENSOR_IDS.map((id) => ({ id, point: points[id] })),
     }
+    const saved = savedSnapshotsRef.current
+    let changed = false
+
+    // Throttle per snapshot, not per reading: one board's payload updates both
+    // the aggregate tail and its own board tail, and boards arrive interleaved.
+    const write = (key: string) => {
+      if (now - (lastSnapshotWriteRef.current[key] ?? 0) < LIVE_SNAPSHOT_WRITE_MS) return
+      lastSnapshotWriteRef.current[key] = now
+      changed = true
+      if (key === 'all') {
+        saved.all = snapshot
+        setLiveSavedAt(snapshot.savedAt)
+      } else {
+        const id = Number(key)
+        saved.devices[id] = snapshot
+        setLiveSavedAtByDevice((prev) => ({ ...prev, [id]: snapshot.savedAt }))
+      }
+    }
+
+    write('all')
+    if (device !== null && Number.isFinite(device)) write(String(device))
+    if (!changed) return
+
     try {
-      localStorage.setItem(LIVE_SNAPSHOT_KEY, JSON.stringify(snapshot))
+      localStorage.setItem(LIVE_SNAPSHOT_KEY, JSON.stringify(saved))
     } catch {
       /* storage unavailable — live UI still works */
     }
-    setLiveSavedAt(snapshot.savedAt)
+  }
+
+  function restoreSnapshot(target: SensorBuffers, snapshot: LiveSnapshot): boolean {
+    let changed = false
+    for (const { id, point } of snapshot.points) {
+      if (!target[id] || typeof point?.value !== 'number') continue
+      target[id] = [point]
+      changed = true
+    }
+    return changed
   }
 
   // Restore the last live values before the socket/REST work starts. The one-hour
@@ -220,20 +318,33 @@ export function SensorProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Deferred to keep the first client render identical to the prerendered HTML.
     const t = setTimeout(() => {
-      const snapshot = loadLiveSnapshot()
-      if (!snapshot) return
+      const saved = loadLiveSnapshots()
+      savedSnapshotsRef.current = saved
       let changed = false
-      for (const { id, point } of snapshot.points) {
-        if (!buffersRef.current[id] || typeof point?.value !== 'number') continue
-        buffersRef.current[id] = [point]
-        changed = true
+      if (saved.all) {
+        changed = restoreSnapshot(buffersRef.current.all, saved.all) || changed
+        setLiveSavedAt(saved.all.savedAt)
+        if (saved.all.fusion) {
+          setLastFusion(saved.all.fusion)
+          fusionRestoredRef.current = true
+        }
       }
-      if (snapshot.fusion) setLastFusion(snapshot.fusion)
-      setLiveSavedAt(snapshot.savedAt)
+      const savedAtByDevice: Record<number, number> = {}
+      for (const [key, snapshot] of Object.entries(saved.devices)) {
+        const device = Number(key)
+        if (!Number.isFinite(device)) continue
+        changed = restoreSnapshot(deviceBuffers(buffersRef.current, device), snapshot) || changed
+        savedAtByDevice[device] = snapshot.savedAt
+        if (!fusionRestoredRef.current && snapshot.fusion) {
+          setLastFusion(snapshot.fusion)
+          fusionRestoredRef.current = true
+        }
+      }
+      if (Object.keys(savedAtByDevice).length) setLiveSavedAtByDevice(savedAtByDevice)
       if (changed) rebuildSeries()
     }, 0)
     return () => clearTimeout(t)
-  }, [])
+  }, [rebuildSeries])
 
   useEffect(() => {
     if (!isApiConfigured()) return
@@ -256,21 +367,26 @@ export function SensorProvider({ children }: { children: ReactNode }) {
 
       const ws = connectLiveTelemetry(
         token,
-        (points: SensorPoint, fusion: FusionData) => {
+        (device: number, points: SensorPoint, fusion: FusionData) => {
           if (cancelled || generation !== wsGenerationRef.current) return
-          setLastWsReadingAt(Date.now())
-          pushPoint('mq7', points.mq7)
-          pushPoint('dht22', points.dht22)
-          pushPoint('acs712', points.acs712)
-          pushPoint('humidity', points.humidity)
+          const at = Date.now()
+          setLastWsReadingAt(at)
+          if (Number.isFinite(device)) {
+            setLastReadingAtByDevice((prev) => ({ ...prev, [device]: at }))
+            pushReading(device, points)
+          } else {
+            // Malformed payloads still keep the aggregate view usable.
+            for (const id of SENSOR_IDS) appendPoint(buffersRef.current.all, id, points[id])
+          }
           setLastFusion(fusion)
-          saveLiveSnapshot(points, fusion)
+          saveLiveSnapshot(Number.isFinite(device) ? device : null, points, fusion)
           rebuildSeries()
         },
         (code) => {
           if (cancelled || generation !== wsGenerationRef.current || isOffline()) return
           setLiveStatus('reconnecting')
           setLastWsReadingAt(null)
+          setLastReadingAtByDevice({})
           if (code === 4401) {
             void refreshAccessToken().then((newToken) => {
               if (generation !== wsGenerationRef.current || cancelled) return
@@ -286,6 +402,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
           // A fresh session must prove itself with a new reading before the
           // dashboard may show a live device again.
           setLastWsReadingAt(null)
+          setLastReadingAtByDevice({})
           setLiveStatus('connected')
         }
       )
@@ -311,11 +428,37 @@ export function SensorProvider({ children }: { children: ReactNode }) {
         if (cancelled) return
         const wsOpen = typeof WebSocket !== 'undefined' && wsRef.current?.readyState === WebSocket.OPEN
         let changed = false
+
+        // The unfiltered REST tail is also the per-device seed: every point
+        // carries the numeric device id from the backend payload.
+        const grouped = new Map<number, SensorBuffers>()
         for (const s of latest) {
-          if (!s.points.length) continue
-          if (wsOpen && buffersRef.current[s.id].length) continue
-          buffersRef.current[s.id] = [...s.points].slice(-MAX_BUFFER)
-          changed = true
+          if (typeof s.id !== 'string') continue
+          if (!wsOpen || !buffersRef.current.all[s.id].length) {
+            if (s.points.length) {
+              buffersRef.current.all[s.id] = [...s.points].slice(-MAX_BUFFER)
+              changed = true
+            }
+          }
+          for (const p of s.points) {
+            if (typeof p.device !== 'number') continue
+            let perDevice = grouped.get(p.device)
+            if (!perDevice) {
+              perDevice = emptyBuffers()
+              grouped.set(p.device, perDevice)
+            }
+            perDevice[s.id].push(p)
+          }
+        }
+        for (const [device, perDevice] of grouped) {
+          const buf = deviceBuffers(buffersRef.current, device)
+          for (const id of SENSOR_IDS) {
+            const points = perDevice[id]
+            if (!points.length || (wsOpen && buf[id].length)) continue
+            points.sort((a, b) => (a.t ?? 0) - (b.t ?? 0))
+            buf[id] = points.slice(-MAX_BUFFER)
+            changed = true
+          }
         }
         if (changed) rebuildSeries()
       } catch {
@@ -333,7 +476,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
       let changed = false
       for (const s of snapshot.series) {
         if (!s.points.length) continue
-        const buf = buffersRef.current[s.id]
+        const buf = buffersRef.current.all[s.id]
         const seedPoints = s.points.filter((p) => typeof p.t === 'number' && Number.isFinite(p.t))
         const seedLastT = seedPoints.length ? seedPoints[seedPoints.length - 1].t ?? 0 : 0
         // Keep snapshot/live points newer than the seed's tail — this covers
@@ -342,7 +485,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
         // Seed is ascending; append preserved live tail so order is maintained.
         const merged = [...seedPoints.filter((p) => typeof p.t === 'number' && (!seedLastT || p.t <= seedLastT)), ...fresh]
         if (merged.length) {
-          buffersRef.current[s.id] = merged.slice(-MAX_BUFFER)
+          buffersRef.current.all[s.id] = merged.slice(-MAX_BUFFER)
           changed = true
         }
       }
@@ -402,7 +545,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
       reconnectRef.current = () => {}
       clearInterval(backfillId)
     }
-  }, [])
+  }, [pushReading, rebuildSeries])
 
   // Don't retry the socket every 3 s while offline; resume as soon as we reconnect.
   useEffect(() => {
@@ -568,10 +711,13 @@ export function SensorProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       series,
+      seriesByDevice,
       lastFusion,
       liveStatus: effectiveLiveStatus,
       lastWsReadingAt,
+      lastReadingAtByDevice,
       liveSavedAt,
+      liveSavedAtByDevice,
       liveSeeding,
       liveReady,
       notifications,
@@ -583,10 +729,13 @@ export function SensorProvider({ children }: { children: ReactNode }) {
     }),
     [
       series,
+      seriesByDevice,
       lastFusion,
       effectiveLiveStatus,
       lastWsReadingAt,
+      lastReadingAtByDevice,
       liveSavedAt,
+      liveSavedAtByDevice,
       liveSeeding,
       liveReady,
       notifications,
